@@ -7,10 +7,10 @@
         "FieldName": "AuthKey",
         "InputType": "password",
         "IsFlagArgument": false,
-        "ParamFieldName": "AuthKey",
         "IncludeInCommandLine": false,
         "DefaultValue": "",
-        "EnumValues": {}
+        "EnumValues": {},
+		"Required": true
     },
     {
         "DisplayName": "Debug",
@@ -20,7 +20,6 @@
         "FieldName": "Debug",
         "InputType": "checkbox",
         "IsFlagArgument": false,
-        "ParamFieldName": "Debug",
         "IncludeInCommandLine": false,
         "DefaultValue": "false",
         "EnumValues": {
@@ -36,9 +35,8 @@
         "FieldName": "Description",
         "InputType": "text",
         "IsFlagArgument": false,
-        "ParamFieldName": "Description",
         "IncludeInCommandLine": false,
-        "DefaultValue": "BeamMP Default Description",
+        "DefaultValue": "My AMP Powered BeamMP Server",
         "EnumValues": {}
     },
     {
@@ -49,7 +47,6 @@
         "FieldName": "Map",
         "InputType": "text",
         "IsFlagArgument": false,
-        "ParamFieldName": "Map",
         "IncludeInCommandLine": false,
         "DefaultValue": "/levels/gridmap_v2/info.json",
         "EnumValues": {}
@@ -62,7 +59,6 @@
         "FieldName": "Private",
         "InputType": "checkbox",
         "IsFlagArgument": false,
-        "ParamFieldName": "Private",
         "IncludeInCommandLine": false,
         "DefaultValue": "true",
         "EnumValues": {
@@ -78,23 +74,22 @@
         "FieldName": "Name",
         "InputType": "text",
         "IsFlagArgument": false,
-        "ParamFieldName": "Name",
         "IncludeInCommandLine": false,
-        "DefaultValue": "BeamMP Server",
+        "DefaultValue": "BeamMP Server powered by AMP",
         "EnumValues": {}
     },
 	{
         "DisplayName": "ServerPort",
         "Category": "Server Port",
-        "Description": "",
+        "Description": "Which port number the IP address should accept requests on.",
         "Keywords": "server,port",
         "FieldName": "ServerPort",
         "InputType": "number",
         "IsFlagArgument": false,
-        "ParamFieldName": "$ApplicationPort1",
         "IncludeInCommandLine": false,
         "DefaultValue": "30814",
-        "EnumValues": {}
+        "EnumValues": {},
+        "Hidden": true
     },
     {
         "DisplayName": "MaxCars",
@@ -104,7 +99,6 @@
         "FieldName": "MaxCars",
         "InputType": "number",
         "IsFlagArgument": false,
-        "ParamFieldName": "MaxCars",
         "IncludeInCommandLine": false,
         "DefaultValue": "1",
         "EnumValues": {}
@@ -114,10 +108,9 @@
         "Category": "Server Settings",
         "Description": "Total number of players allowed on the server",
         "Keywords": "max,player,count,players,total",
-        "FieldName": "MaxPlayers",
+        "FieldName": "$MaxUsers",
         "InputType": "number",
         "IsFlagArgument": false,
-        "ParamFieldName": "MaxPlayers",
         "IncludeInCommandLine": false,
         "DefaultValue": "10",
         "EnumValues": {}
@@ -130,7 +123,6 @@
         "FieldName": "ResourceFolder",
         "InputType": "text",
         "IsFlagArgument": false,
-        "ParamFieldName": "ResourceFolder",
         "IncludeInCommandLine": false,
         "DefaultValue": "Resources",
         "EnumValues": {}
@@ -143,7 +135,6 @@
         "FieldName": "SendErrorsShowMessage",
         "InputType": "checkbox",
         "IsFlagArgument": false,
-        "ParamFieldName": "SendErrorsShowMessage",
         "IncludeInCommandLine": false,
         "DefaultValue": "true",
         "EnumValues": {
@@ -159,7 +150,6 @@
         "FieldName": "SendErrors",
         "InputType": "checkbox",
         "IsFlagArgument": false,
-        "ParamFieldName": "SendErrors",
         "IncludeInCommandLine": false,
         "DefaultValue": "true",
         "EnumValues": {
@@ -175,7 +165,6 @@
         "FieldName": "SSLKeyPath",
         "InputType": "text",
         "IsFlagArgument": false,
-        "ParamFieldName": "SSLKeyPath",
         "IncludeInCommandLine": false,
         "DefaultValue": "./.ssl/HttpServer/key.pem",
         "EnumValues": {}
@@ -188,7 +177,6 @@
         "FieldName": "SSLCertPath",
         "InputType": "text",
         "IsFlagArgument": false,
-        "ParamFieldName": "SSLCertPath",
         "IncludeInCommandLine": false,
         "DefaultValue": "./.ssl/HttpServer/cert.pem",
         "EnumValues": {}
@@ -198,13 +186,13 @@
         "Category": "HTTP Settings",
         "Description": "",
         "Keywords": "http,port",
-        "FieldName": "HTTPServerPort",
+        "FieldName": "$ApplicationPort1",
         "InputType": "number",
         "IsFlagArgument": false,
-        "ParamFieldName": "$ApplicationPort2",
         "IncludeInCommandLine": false,
         "DefaultValue": "8080",
-        "EnumValues": {}
+        "EnumValues": {},
+        "Hidden": true
     },
 	{
         "DisplayName": "UseSSL",
@@ -214,7 +202,6 @@
         "FieldName": "UseSSL",
         "InputType": "checkbox",
         "IsFlagArgument": false,
-        "ParamFieldName": "UseSSL",
         "IncludeInCommandLine": false,
         "DefaultValue": "true",
         "EnumValues": {
@@ -230,7 +217,6 @@
         "FieldName": "HTTPServerEnabled",
         "InputType": "checkbox",
         "IsFlagArgument": false,
-        "ParamFieldName": "HTTPServerEnabled",
         "IncludeInCommandLine": false,
         "DefaultValue": "false",
         "EnumValues": {

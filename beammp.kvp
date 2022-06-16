@@ -1,8 +1,9 @@
 App.AdminMethod=STDIO
-App.ApplicationPort1=30814
-App.ApplicationPort2=8080
-App.ApplicationPort3=
-App.RemoteAdminPort=
+App.Ports=[{"Protocol":"Both","Name":"Server Port","Description":"Port used for clients to connect to.","Port":30814,"Ref":"ServerPort"},{"Protocol":"TCP","Name":"HTTP Port","Description":"Port for the HTTP Server. Disabled by default.","Port":8080,"Ref":"HTTPPort"}]
+App.PrimaryApplicationPortRef=ServerPort
+App.ApplicationPort3=0
+App.RemoteAdminPort=0
+App.MaxUsers=10
 App.ApplicationReadyMode=RegexMatch
 App.BaseDirectory=./beammp/
 App.CommandLineArgs=
