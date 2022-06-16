@@ -1,6 +1,26 @@
 [
 	{
-		"ConfigFile": "beammpconfig.json",
-		"AutoMap": true
+		"ConfigFile": "beammpconfig.toml",
+		"ConfigType": "ini",
+		"ConfigFormat": "{0} = {1}",
+		"Subsections": [
+			{
+				"Heading": "General",
+				"SettingMappings": {
+					"Name": "Name",			
+					"Port": "ServerPort",
+					"AuthKey": "AuthKey",
+					"Debug": "Debug",
+					"Private": "Private",
+					"MaxCars": "MaxCars",
+					"MaxPlayers": "MaxPlayers",
+					"Map": "Map",
+					"Description": "Description",
+					"ResourceFolder": "ResourceFolder",
+					"SendErrors": "SendErrors",
+					"SendErrorsShowMessage": "SendErrorsShowMessage",
+				}
+			}
+		]
 	}
 ]
