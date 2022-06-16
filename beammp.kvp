@@ -1,5 +1,8 @@
 App.AdminMethod=STDIO
 App.ApplicationPort1=30814
+App.ApplicationPort2=8080
+App.ApplicationPort3=
+App.RemoteAdminPort=
 App.ApplicationReadyMode=RegexMatch
 App.BaseDirectory=./beammp/
 App.CommandLineArgs=

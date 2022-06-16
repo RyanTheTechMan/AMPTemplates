@@ -83,6 +83,19 @@
         "DefaultValue": "BeamMP Server",
         "EnumValues": {}
     },
+	{
+        "DisplayName": "ServerPort",
+        "Category": "Server Port",
+        "Description": "",
+        "Keywords": "server,port",
+        "FieldName": "ServerPort",
+        "InputType": "number",
+        "IsFlagArgument": false,
+        "ParamFieldName": "$ApplicationPort1",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "30814",
+        "EnumValues": {}
+    },
     {
         "DisplayName": "MaxCars",
         "Category": "Server Settings",
@@ -149,6 +162,77 @@
         "ParamFieldName": "SendErrors",
         "IncludeInCommandLine": false,
         "DefaultValue": "true",
+        "EnumValues": {
+            "true": "True",
+            "false": "False"
+        }
+    },
+	{
+        "DisplayName": "SSLKeyPath",
+        "Category": "HTTP Settings",
+        "Description": "",
+        "Keywords": "http,ssl,key,cert",
+        "FieldName": "SSLKeyPath",
+        "InputType": "text",
+        "IsFlagArgument": false,
+        "ParamFieldName": "SSLKeyPath",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "./.ssl/HttpServer/key.pem",
+        "EnumValues": {}
+    },
+	{
+        "DisplayName": "SSLCertPath",
+        "Category": "HTTP Settings",
+        "Description": "",
+        "Keywords": "http,ssl,key,cert",
+        "FieldName": "SSLCertPath",
+        "InputType": "text",
+        "IsFlagArgument": false,
+        "ParamFieldName": "SSLCertPath",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "./.ssl/HttpServer/cert.pem",
+        "EnumValues": {}
+    },
+	{
+        "DisplayName": "HTTPServerPort",
+        "Category": "HTTP Settings",
+        "Description": "",
+        "Keywords": "http,port",
+        "FieldName": "HTTPServerPort",
+        "InputType": "number",
+        "IsFlagArgument": false,
+        "ParamFieldName": "$ApplicationPort2",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "8080",
+        "EnumValues": {}
+    },
+	{
+        "DisplayName": "UseSSL",
+        "Category": "HTTP Settings",
+        "Description": "Recommended to keep enabled. With SSL the server will serve https and requires valid key and cert files",
+        "Keywords": "http,ssl",
+        "FieldName": "UseSSL",
+        "InputType": "checkbox",
+        "IsFlagArgument": false,
+        "ParamFieldName": "UseSSL",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "true",
+        "EnumValues": {
+            "true": "True",
+            "false": "False"
+        }
+    },
+	{
+        "DisplayName": "HTTPServerEnabled",
+        "Category": "HTTP Settings",
+        "Description": "Enables the internal HTTP server",
+        "Keywords": "http",
+        "FieldName": "HTTPServerEnabled",
+        "InputType": "checkbox",
+        "IsFlagArgument": false,
+        "ParamFieldName": "HTTPServerEnabled",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "false",
         "EnumValues": {
             "true": "True",
             "false": "False"

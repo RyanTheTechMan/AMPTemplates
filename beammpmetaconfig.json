@@ -7,18 +7,28 @@
 			{
 				"Heading": "General",
 				"SettingMappings": {
-					"Name": "Name",			
+					"Name": "\"Name\"",
 					"Port": "ServerPort",
-					"AuthKey": "AuthKey",
+					"AuthKey": "\"AuthKey\"",
 					"Debug": "Debug",
 					"Private": "Private",
 					"MaxCars": "MaxCars",
 					"MaxPlayers": "MaxPlayers",
-					"Map": "Map",
-					"Description": "Description",
-					"ResourceFolder": "ResourceFolder",
+					"Map": "\"Map\"",
+					"Description": "\"Description\"",
+					"ResourceFolder": "\"ResourceFolder\"",
 					"SendErrors": "SendErrors",
-					"SendErrorsShowMessage": "SendErrorsShowMessage",
+					"SendErrorsShowMessage": "SendErrorsShowMessage"
+				}
+			},
+			{
+				"Heading": "HTTP",
+				"SettingMappings": {
+					"SSLKeyPath": "\"SSLKeyPath\"",
+					"SSLCertPath": "\"SSLCertPath\"",
+					"HTTPServerPort": "$ApplicationPort2",
+					"UseSSL": "UseSSL",
+					"HTTPServerEnabled": "HTTPServerEnabled"
 				}
 			}
 		]
