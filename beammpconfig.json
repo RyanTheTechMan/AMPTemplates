@@ -99,8 +99,8 @@
     {
         "DisplayName": "MaxPlayers",
         "Category": "Server Settings",
-        "Description": "",
-        "Keywords": "max,player,count,players",
+        "Description": "Total number of players allowed on the server",
+        "Keywords": "max,player,count,players,total",
         "FieldName": "MaxPlayers",
         "InputType": "number",
         "IsFlagArgument": false,
@@ -112,7 +112,7 @@
     {
         "DisplayName": "ResourceFolder",
         "Category": "Server Settings",
-        "Description": "",
+        "Description": "Location of resources folder.",
         "Keywords": "resource,folder",
         "FieldName": "ResourceFolder",
         "InputType": "text",
