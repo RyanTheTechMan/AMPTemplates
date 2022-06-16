@@ -1,0 +1,157 @@
+[
+    {
+        "DisplayName": "AuthKey",
+        "Category": "",
+        "Description": "Used to identify your server with the backend. Get an AuthKey from https://beammp.com/k/dashboard on the left under \"Keys\"",
+        "Keywords": "",
+        "FieldName": "",
+        "InputType": "password",
+        "IsFlagArgument": false,
+        "ParamFieldName": "",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "Debug",
+        "Category": "",
+        "Description": "When enabled (true), will show more messages in the log and provide more information. Enable this if you run into issues. Enabling this will drastically increase the size of the log file.",
+        "Keywords": "",
+        "FieldName": "",
+        "InputType": "checkbox",
+        "IsFlagArgument": false,
+        "ParamFieldName": "",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "false",
+        "EnumValues": {
+            "true": "True",
+            "false": "False"
+        }
+    },
+    {
+        "DisplayName": "Description",
+        "Category": "",
+        "Description": "Shown as the description of the server in the server list (if the server is public). You can use special characters to format this with colors and styles.",
+        "Keywords": "",
+        "FieldName": "",
+        "InputType": "text",
+        "IsFlagArgument": false,
+        "ParamFieldName": "",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "BeamMP Default Description",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "Map",
+        "Category": "",
+        "Description": "The map your server will host. Has to be installed either by default (a list can be found below) or as a server mod.",
+        "Keywords": "",
+        "FieldName": "",
+        "InputType": "text",
+        "IsFlagArgument": false,
+        "ParamFieldName": "",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "/levels/gridmap_v2/info.json",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "Private",
+        "Category": "",
+        "Description": "When enabled (true), your server will not be shown in the server list. Anyone with the correct IP and port can still connect.",
+        "Keywords": "",
+        "FieldName": "",
+        "InputType": "checkbox",
+        "IsFlagArgument": false,
+        "ParamFieldName": "",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "true",
+        "EnumValues": {
+            "true": "True",
+            "false": "False"
+        }
+    },
+    {
+        "DisplayName": "Name",
+        "Category": "",
+        "Description": "Shown as the name / title of your server in the server list. You can use special characters to format this with colors and styles.",
+        "Keywords": "",
+        "FieldName": "",
+        "InputType": "text",
+        "IsFlagArgument": false,
+        "ParamFieldName": "",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "BeamMP Server",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "MaxCars",
+        "Category": "",
+        "Description": "The maximum number of cars per player. Any additional cars a player tries to spawn will be deleted instantly.",
+        "Keywords": "",
+        "FieldName": "",
+        "InputType": "number",
+        "IsFlagArgument": false,
+        "ParamFieldName": "",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "1",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "MaxPlayers",
+        "Category": "",
+        "Description": "",
+        "Keywords": "",
+        "FieldName": "",
+        "InputType": "number",
+        "IsFlagArgument": false,
+        "ParamFieldName": "",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "10",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "ResourceFolder",
+        "Category": "",
+        "Description": "",
+        "Keywords": "",
+        "FieldName": "",
+        "InputType": "text",
+        "IsFlagArgument": false,
+        "ParamFieldName": "",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "Resources",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "SendErrorsShowMessage",
+        "Category": "",
+        "Description": "Turn on/off the SendErrors message you get on startup.",
+        "Keywords": "",
+        "FieldName": "",
+        "InputType": "checkbox",
+        "IsFlagArgument": false,
+        "ParamFieldName": "",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "true",
+        "EnumValues": {
+            "true": "True",
+            "false": "False"
+        }
+    },
+    {
+        "DisplayName": "SendErrors",
+        "Category": "",
+        "Description": "If SendErrors is `true`, the server will send helpful info about crashes and other issues back to the BeamMP developers. This info may include your config, who is on your server at the time of the error, and similar general information. This kind of data is vital in helping us diagnose and fix issues faster. This has no impact on server performance. You can opt-out of this system by setting this to `false`.",
+        "Keywords": "",
+        "FieldName": "",
+        "InputType": "checkbox",
+        "IsFlagArgument": false,
+        "ParamFieldName": "",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "true",
+        "EnumValues": {
+            "true": "True",
+            "false": "False"
+        }
+    }
+]
