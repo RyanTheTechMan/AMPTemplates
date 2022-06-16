@@ -1,7 +1,7 @@
 [
     {
         "DisplayName": "AuthKey",
-        "Category": "",
+        "Category": "Server Settings",
         "Description": "Used to identify your server with the backend. Get an AuthKey from https://beammp.com/k/dashboard on the left under \"Keys\"",
         "Keywords": "",
         "FieldName": "",
@@ -14,7 +14,7 @@
     },
     {
         "DisplayName": "Debug",
-        "Category": "",
+        "Category": "Server Settings",
         "Description": "When enabled (true), will show more messages in the log and provide more information. Enable this if you run into issues. Enabling this will drastically increase the size of the log file.",
         "Keywords": "",
         "FieldName": "",
@@ -30,7 +30,7 @@
     },
     {
         "DisplayName": "Description",
-        "Category": "",
+        "Category": "Server Settings",
         "Description": "Shown as the description of the server in the server list (if the server is public). You can use special characters to format this with colors and styles.",
         "Keywords": "",
         "FieldName": "",
@@ -43,7 +43,7 @@
     },
     {
         "DisplayName": "Map",
-        "Category": "",
+        "Category": "Server Settings",
         "Description": "The map your server will host. Has to be installed either by default (a list can be found below) or as a server mod.",
         "Keywords": "",
         "FieldName": "",
@@ -56,7 +56,7 @@
     },
     {
         "DisplayName": "Private",
-        "Category": "",
+        "Category": "Server Settings",
         "Description": "When enabled (true), your server will not be shown in the server list. Anyone with the correct IP and port can still connect.",
         "Keywords": "",
         "FieldName": "",
@@ -72,7 +72,7 @@
     },
     {
         "DisplayName": "Name",
-        "Category": "",
+        "Category": "Server Settings",
         "Description": "Shown as the name / title of your server in the server list. You can use special characters to format this with colors and styles.",
         "Keywords": "",
         "FieldName": "",
@@ -85,7 +85,7 @@
     },
     {
         "DisplayName": "MaxCars",
-        "Category": "",
+        "Category": "Server Settings",
         "Description": "The maximum number of cars per player. Any additional cars a player tries to spawn will be deleted instantly.",
         "Keywords": "",
         "FieldName": "",
@@ -98,7 +98,7 @@
     },
     {
         "DisplayName": "MaxPlayers",
-        "Category": "",
+        "Category": "Server Settings",
         "Description": "",
         "Keywords": "",
         "FieldName": "",
@@ -111,7 +111,7 @@
     },
     {
         "DisplayName": "ResourceFolder",
-        "Category": "",
+        "Category": "Server Settings",
         "Description": "",
         "Keywords": "",
         "FieldName": "",
@@ -124,7 +124,7 @@
     },
     {
         "DisplayName": "SendErrorsShowMessage",
-        "Category": "",
+        "Category": "Server Settings",
         "Description": "Turn on/off the SendErrors message you get on startup.",
         "Keywords": "",
         "FieldName": "",
@@ -140,7 +140,7 @@
     },
     {
         "DisplayName": "SendErrors",
-        "Category": "",
+        "Category": "Server Settings",
         "Description": "If SendErrors is `true`, the server will send helpful info about crashes and other issues back to the BeamMP developers. This info may include your config, who is on your server at the time of the error, and similar general information. This kind of data is vital in helping us diagnose and fix issues faster. This has no impact on server performance. You can opt-out of this system by setting this to `false`.",
         "Keywords": "",
         "FieldName": "",
