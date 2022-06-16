@@ -24,6 +24,7 @@ Console.UserJoinRegex=^.+?\[INFO\] Assigned ID (?<userid>\d+) to (?<username>.+?
 Console.UserLeaveRegex=^.+?\[INFO\] (?<username>.+?) Connection Terminated$
 Meta.Author=RyanTheTechMan
 Meta.ConfigManifest=beammpconfig.json
+Meta.MetaConfigManifest=beammpmetaconfig.json
 Meta.ConfigRoot=beammp.kvp
 Meta.Description=BeamNG Modded Server using BeamMP
 Meta.DisplayImageSource=url:https://beammp.com/img/mainlogo.png
