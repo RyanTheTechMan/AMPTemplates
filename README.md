@@ -9,6 +9,7 @@ A repository holding my templates for CubeCoders AMP.
 5. Type `RyanTheTechMan/AMPTemplates`
 6. Press **OK**
 7. Press **Fetch Latest** and wait for it to download the templetes
+8. Refresh your webpage
 
 The downloaded templetes should now appear when you create an instance.
 
