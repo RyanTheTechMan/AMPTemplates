@@ -1,14 +1,12 @@
 App.AdminMethod=STDIO
 App.Ports=[{"Protocol":"Both","Name":"Server Port","Description":"Port used for clients to connect to.","Port":30814,"Ref":"ServerPort"},{"Protocol":"TCP","Name":"HTTP Port","Description":"Port for the HTTP Server. Disabled by default.","Port":8080,"Ref":"HTTPPort"}]
 App.PrimaryApplicationPortRef=ServerPort
-App.ApplicationPort3=0
-App.RemoteAdminPort=0
 App.MaxUsers=10
 App.ApplicationReadyMode=RegexMatch
 App.BaseDirectory=./beammp/
-App.CommandLineArgs=
+App.CommandLineArgs= 
 App.CommandLineParameterDelimiter= 
-App.CommandLineParameterFormat=
+App.CommandLineParameterFormat= 
 App.DisplayName=BeamMP
 App.ExecutableLinux=BeamMP-Server-linux
 App.ExecutableWin=BeamMP-Server.exe
