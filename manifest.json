@@ -1,8 +1,10 @@
 {
-	"id": "98c52b08-edab-11ec-8ea0-0242ac120002",
-	"authors": ["RyanTheTechMan"],
-	"origin": "https://github.com/RyanTheTechMan/AMPTemplates.git",
-	"url": "https://github.com/RyanTheTechMan/AMPTemplates",
-	"imagefile": "",
-	"prefix": "",
+    "id": "98c52b08-edab-11ec-8ea0-0242ac120002",
+    "authors": [
+        "RyanTheTechMan"
+    ],
+    "origin": "https://github.com/RyanTheTechMan/AMPTemplates.git",
+    "url": "https://github.com/RyanTheTechMan/AMPTemplates",
+    "imagefile": "",
+    "prefix": ""
 }

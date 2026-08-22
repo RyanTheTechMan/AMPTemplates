@@ -8,26 +8,18 @@ A repository holding my templates for CubeCoders AMP.
 4. Click **Add** under **Configuration Repositories**
 5. Type `RyanTheTechMan/AMPTemplates`
 6. Press **OK**
-7. Press **Fetch Latest** and wait for it to download the templetes
+7. Press **Fetch Latest** and wait for it to download the templates
 8. Refresh your webpage
 
-The downloaded templetes should now appear when you create an instance.
-
+The downloaded templates should now appear when you create an instance.
 
 # Instance Notes
 
-### BeamMP (BeamNG)
-As of BeamMP Server **v3.0.0** to **v3.0.1**, the configuration file is [not generated correctly](https://github.com/BeamMP/BeamMP-Server/issues/105) on a fresh install.
+### AzerothCore
+This repository includes an AMP Generic Module template for [AzerothCore](https://www.azerothcore.org/) Wrath of the Lich King 3.3.5a servers.
 
-The best way to fix this, at the moment, is by [manually downloading](https://github.com/BeamMP/BeamMP-Server/releases/tag/v2.3.3) **v2.3.3**, running it, then updating to the latest version.
+The template is designed to run inside AMP's Docker/container environment and supports both normal AzerothCore and the compatible [mod-playerbots](https://github.com/mod-playerbots/mod-playerbots) core/module combinations.
 
-#### BeamMP - Installation
-1. [Add this repository to your AMP Configuration](https://github.com/RyanTheTechMan/AMPTemplates#how-to-add-these-templates-to-your-amp-installation)
-2. Click **Create Instance**
-3. Select **BeamMP**
-4. Click Create Instance
-5. If desired, edit the ports. Note that HTTP is disabled by default so it may not be used.
-6. Open the Instance
-7. Go to **Server Settings** and add your [AuthKey](https://beammp.com/k/dashboard) and edit any other settings here.
+The first **Update** performs the source download, MySQL setup, compilation, and client-data setup, so it is more involved than a typical prebuilt game server installation.
 
-NOTE: If you would like the server to be visible on the server list be sure to disable Private.
+See the **[AzerothCore AMP Install Guide](AZEROTHCORE.md)** for installation, networking, client setup, Playerbots, modules, updates, and troubleshooting.

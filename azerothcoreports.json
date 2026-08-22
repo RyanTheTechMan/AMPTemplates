@@ -1,0 +1,16 @@
+[
+    {
+        "Protocol": "TCP",
+        "Port": 3724,
+        "Ref": "AuthPort",
+        "Name": "Authentication Port",
+        "Description": "Wrath of the Lich King login/authentication traffic"
+    },
+    {
+        "Protocol": "TCP",
+        "Port": 8085,
+        "Ref": "WorldPort",
+        "Name": "World Port",
+        "Description": "In-game world traffic advertised in the AzerothCore realmlist"
+    }
+]
