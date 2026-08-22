@@ -74,7 +74,7 @@ esac
 [[ "$MYSQL_BUFFER_POOL_MB" =~ ^[0-9]+$ ]] || fail "MySQL buffer pool must be an integer"
 (( MYSQL_BUFFER_POOL_MB >= 256 )) || fail "MySQL buffer pool must be at least 256 MB"
 
-required_commands=(git cmake ninja clang clang++ ccache curl jq unzip tar xz sed awk grep find nproc ps sha256sum nm ldd)
+required_commands=(git cmake ninja clang clang++ ccache curl jq unzip tar xz sed awk grep find nproc ps sha256sum nm ldd readlink)
 for command_name in "${required_commands[@]}"; do
     command -v "$command_name" >/dev/null 2>&1 || fail "Required command '$command_name' is missing from the AMP container"
 done
@@ -89,6 +89,13 @@ MYSQL_RUN_DIR="$BASE_DIR/run/mysqld"
 MYSQL_LOG_DIR="$BASE_DIR/logs/mysql"
 MYSQL_SOCKET="$MYSQL_RUN_DIR/mysqld.sock"
 MYSQL_PID_FILE="$MYSQL_RUN_DIR/mysqld.pid"
+MYSQL_COMPAT_DIR="$MYSQL_DIR/compat"
+
+# Oracle's generic MySQL binaries require the historical libaio.so.1 SONAME.
+# Debian 13 renamed the system library to libaio.so.1t64. This template is
+# x86_64-only, where time_t was already 64-bit, so a local compatibility name
+# can safely point at Debian 13's system library without modifying the container.
+export LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}"
 
 mkdir -p "$STATE_DIR" "$DIST_DIR" "$MYSQL_DATA_DIR" "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" \
     "$BASE_DIR/logs" "$BASE_DIR/temp" "$BASE_DIR/ccache"
@@ -244,6 +251,41 @@ install_mysql() {
     log "Installed MySQL $target_version"
 }
 
+ensure_mysql_libaio_compat() {
+    local system_libaio unresolved
+    [[ "$(uname -m)" == "x86_64" ]] \
+        || fail "The Debian 13 libaio compatibility shim is only validated for x86_64"
+
+    mkdir -p "$MYSQL_COMPAT_DIR"
+
+    system_libaio="$(find /lib /usr/lib \
+        \( -name 'libaio.so.1t64' -o -name 'libaio.so.1t64.*' \) \
+        -print -quit 2>/dev/null || true)"
+    [[ -n "$system_libaio" ]] \
+        || fail "Debian 13 libaio1t64 is missing. Ensure the template's Container Packages were installed."
+    system_libaio="$(readlink -f "$system_libaio")"
+    [[ -f "$system_libaio" ]] || fail "Could not resolve Debian 13's libaio1t64 shared library"
+
+    rm -f "$MYSQL_COMPAT_DIR/libaio.so.1"
+    ln -s "$system_libaio" "$MYSQL_COMPAT_DIR/libaio.so.1"
+
+    if ! nm -D "$MYSQL_COMPAT_DIR/libaio.so.1" 2>/dev/null | grep -Eq '[[:space:]]io_submit(@@[^[:space:]]+)?$'; then
+        fail "Debian 13 libaio compatibility library does not export io_submit"
+    fi
+    if ! nm -D "$MYSQL_COMPAT_DIR/libaio.so.1" 2>/dev/null | grep -Eq '[[:space:]]io_getevents(@@[^[:space:]]+)?$'; then
+        fail "Debian 13 libaio compatibility library does not export io_getevents"
+    fi
+
+    unresolved="$(ldd "$MYSQL_DIR/bin/mysqld" 2>/dev/null | grep 'not found' || true)"
+    [[ -z "$unresolved" ]] \
+        || fail "Portable MySQL still has unresolved runtime dependencies after preparing libaio compatibility: $unresolved"
+
+    "$MYSQL_DIR/bin/mysqld" --version >/dev/null 2>&1 \
+        || fail "Portable MySQL could not start after preparing Debian 13 libaio compatibility"
+
+    log "Prepared Debian 13 libaio compatibility for portable MySQL"
+}
+
 find_mysql_client_library() {
     local candidate
     for candidate in \
@@ -278,7 +320,7 @@ verify_portable_mysql_toolchain() {
         fi
     fi
 
-    unresolved="$(LD_LIBRARY_PATH="$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}" ldd "$mysql_client_library" 2>/dev/null | grep 'not found' || true)"
+    unresolved="$(LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}" ldd "$mysql_client_library" 2>/dev/null | grep 'not found' || true)"
     [[ -z "$unresolved" ]] || fail "Portable MySQL client library has unresolved runtime dependencies: $unresolved"
     printf '%s\n' "$mysql_client_library" > "$STATE_DIR/mysql-client-library"
 }
@@ -531,7 +573,7 @@ build_azerothcore() {
 
     export MYSQL_HOME="$MYSQL_DIR"
     export PATH="$MYSQL_DIR/bin:$PATH"
-    export LD_LIBRARY_PATH="$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}"
+    export LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}"
     export CCACHE_DIR="$BASE_DIR/ccache"
     export CCACHE_MAXSIZE="3G"
 
@@ -585,10 +627,10 @@ build_azerothcore() {
 
     local server_binary linked_mysql unresolved_runtime
     for server_binary in "$DIST_DIR/bin/authserver" "$DIST_DIR/bin/worldserver"; do
-        unresolved_runtime="$(LD_LIBRARY_PATH="$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}" ldd "$server_binary" 2>/dev/null | grep 'not found' || true)"
+        unresolved_runtime="$(LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}" ldd "$server_binary" 2>/dev/null | grep 'not found' || true)"
         [[ -z "$unresolved_runtime" ]] \
             || fail "$(basename "$server_binary") has unresolved runtime libraries: $unresolved_runtime"
-        linked_mysql="$(LD_LIBRARY_PATH="$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}" ldd "$server_binary" 2>/dev/null \
+        linked_mysql="$(LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}" ldd "$server_binary" 2>/dev/null \
             | awk '/libmysqlclient\.so/{print $3; exit}')"
         [[ -n "$linked_mysql" && "$linked_mysql" == "$MYSQL_DIR/lib/"* ]] \
             || fail "$(basename "$server_binary") is not resolving libmysqlclient from the bundled MySQL installation (resolved '${linked_mysql:-none}')"
@@ -697,6 +739,7 @@ install_client_data() {
 }
 
 install_mysql
+ensure_mysql_libaio_compat
 initialize_mysql_data
 stop_temporary_mysql
 MYSQL_STARTED_HERE="false"

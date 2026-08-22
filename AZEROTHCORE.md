@@ -20,6 +20,8 @@ On a Windows AMP host, use AMP's Docker/container support so the AzerothCore ins
 
 The template uses `cubecoders/ampbase:debian`, CubeCoders' primary AMP base image, which is currently based on **Debian 13**. Do not manually add Debian's `default-libmysqlclient-dev` or MariaDB compatibility development packages to this instance: the template intentionally compiles and runs against its own bundled Oracle MySQL client libraries.
 
+Oracle's generic MySQL builds still request the historical `libaio.so.1` library name, while Debian 13 provides `libaio.so.1t64`. The installer handles this automatically inside the instance by creating a private compatibility link to Debian 13's `libaio1t64` library; no host or container modification is required.
+
 For AMP's container limits, `0` means unlimited. Unlimited can work on a dedicated host, but explicit CPU/RAM limits are safer when other AMP instances share the machine. The installer itself caps automatic compilation at four parallel jobs unless **Parallel Build Jobs** is changed.
 
 ## 1. Add this template repository to AMP

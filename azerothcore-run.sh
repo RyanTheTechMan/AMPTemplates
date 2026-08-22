@@ -132,6 +132,7 @@ DIST_DIR="$BASE_DIR/dist"
 BIN_DIR="$DIST_DIR/bin"
 ETC_DIR="$DIST_DIR/etc"
 MYSQL_DIR="$BASE_DIR/mysql"
+MYSQL_COMPAT_DIR="$MYSQL_DIR/compat"
 MYSQL_DATA_DIR="$BASE_DIR/mysql-data"
 MYSQL_RUN_DIR="$BASE_DIR/run/mysqld"
 MYSQL_LOG_DIR="$BASE_DIR/logs/mysql"
@@ -161,6 +162,7 @@ DATABASE_USER="$(id -un)"
 [[ -x "$BIN_DIR/authserver" ]] || fail "authserver is not installed; run Update first"
 [[ -x "$BIN_DIR/worldserver" ]] || fail "worldserver is not installed; run Update first"
 [[ -x "$MYSQL_DIR/bin/mysqld" ]] || fail "MySQL is not installed; run Update first"
+[[ -e "$MYSQL_COMPAT_DIR/libaio.so.1" ]] || fail "MySQL libaio compatibility is missing; run Update first"
 [[ -f "$ETC_DIR/authserver.conf" ]] || fail "authserver.conf is missing; run Update first"
 [[ -f "$ETC_DIR/worldserver.conf" ]] || fail "worldserver.conf is missing; run Update first"
 [[ -d "$BIN_DIR/dbc" && -d "$BIN_DIR/maps" && -d "$BIN_DIR/vmaps" && -d "$BIN_DIR/mmaps" ]] \
@@ -168,7 +170,7 @@ DATABASE_USER="$(id -un)"
 
 mkdir -p "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" "$BASE_DIR/logs" "$BASE_DIR/temp" "$BASE_DIR/run"
 export PATH="$MYSQL_DIR/bin:$PATH"
-export LD_LIBRARY_PATH="$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}"
 export AC_LOGIN_DATABASE_INFO=".;$MYSQL_SOCKET;$DATABASE_USER;;acore_auth"
 export AC_WORLD_DATABASE_INFO=".;$MYSQL_SOCKET;$DATABASE_USER;;acore_world"
 export AC_CHARACTER_DATABASE_INFO=".;$MYSQL_SOCKET;$DATABASE_USER;;acore_characters"
@@ -186,7 +188,10 @@ export AC_UPDATES_ENABLE_DATABASES="${AC_UPDATES_ENABLE_DATABASES:-7}"
 export AC_DISABLE_INTERACTIVE="${AC_DISABLE_INTERACTIVE:-1}"
 
 verify_runtime_mysql_linkage() {
-    local server_binary linked_mysql unresolved_runtime
+    local server_binary linked_mysql unresolved_runtime mysql_unresolved
+    mysql_unresolved="$(ldd "$MYSQL_DIR/bin/mysqld" 2>/dev/null | grep 'not found' || true)"
+    [[ -z "$mysql_unresolved" ]] \
+        || fail "mysqld has unresolved runtime libraries: $mysql_unresolved"
     for server_binary in "$BIN_DIR/authserver" "$BIN_DIR/worldserver"; do
         unresolved_runtime="$(ldd "$server_binary" 2>/dev/null | grep 'not found' || true)"
         [[ -z "$unresolved_runtime" ]] \
