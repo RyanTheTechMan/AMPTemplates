@@ -18,7 +18,7 @@ The downloaded templates should now appear when you create an instance.
 ### AzerothCore
 This repository includes an AMP Generic Module template for [AzerothCore](https://www.azerothcore.org/) Wrath of the Lich King 3.3.5a servers.
 
-The template is designed to run inside AMP's Docker/container environment and supports both normal AzerothCore and the compatible [mod-playerbots](https://github.com/mod-playerbots/mod-playerbots) core/module combinations.
+The template is designed to run inside AMP's primary Debian Docker/container environment and supports both normal AzerothCore and the compatible [mod-playerbots](https://github.com/mod-playerbots/mod-playerbots) core/module combinations.
 
 The first **Update** performs the source download, MySQL setup, compilation, and client-data setup, so it is more involved than a typical prebuilt game server installation.
 

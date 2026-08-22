@@ -10,11 +10,17 @@ You will need:
 
 - A working CubeCoders AMP installation with Docker/container support.
 - An x86_64 host. The template currently targets Linux x86_64 inside AMP's container environment.
-- At least **8 GB RAM** and roughly **20 GB free disk** as a practical starting point for the first build. Playerbots and large bot populations benefit from more CPU and memory.
+- Roughly **20 GB free disk** as a practical starting point for the first build.
+- For a normal AzerothCore realm, start with **4 container CPUs and 8-12 GB RAM**.
+- For Playerbots, use **6 container CPUs and at least 16 GB RAM**; **24-32 GB** is preferable for larger bot populations.
 - A legally obtained World of Warcraft Wrath of the Lich King **3.3.5a** client. AzerothCore does not distribute the Blizzard game client.
 - TCP ports **3724** and **8085** available by default, unless you change them in AMP.
 
 On a Windows AMP host, use AMP's Docker/container support so the AzerothCore instance still runs in the same Linux environment described by this guide.
+
+The template uses `cubecoders/ampbase:debian`, CubeCoders' primary AMP base image, which is currently based on **Debian 13**. Do not manually add Debian's `default-libmysqlclient-dev` or MariaDB compatibility development packages to this instance: the template intentionally compiles and runs against its own bundled Oracle MySQL client libraries.
+
+For AMP's container limits, `0` means unlimited. Unlimited can work on a dedicated host, but explicit CPU/RAM limits are safer when other AMP instances share the machine. The installer itself caps automatic compilation at four parallel jobs unless **Parallel Build Jobs** is changed.
 
 ## 1. Add this template repository to AMP
 
@@ -47,7 +53,7 @@ When testing a branch, set **Template Repository Ref** in the AzerothCore settin
 
 Create a new instance and select **AzerothCore**.
 
-The template requires an AMP-managed container. This is intentional: AzerothCore is built from source and needs a consistent compiler, library, MySQL, and runtime environment.
+The template requires an AMP-managed container. This is intentional: AzerothCore is built from source and needs a consistent compiler, library, MySQL, and runtime environment. The expected container image is `cubecoders/ampbase:debian` (currently Debian 13).
 
 Before the first Update, review these settings first:
 
@@ -91,11 +97,13 @@ The first update performs substantially more work than a typical game-server upd
 1. Download the selected AzerothCore source tree.
 2. Download the compatible Playerbots module when a Playerbots distribution is selected.
 3. Download any repositories listed under **Additional AzerothCore Modules**.
-4. Download and initialize the portable MySQL installation.
-5. Configure CMake.
-6. Compile AzerothCore.
-7. Install the resulting binaries and configuration files.
-8. Download/install the selected AzerothCore client-data package.
+4. Download and initialize the portable Oracle MySQL installation.
+5. Verify the bundled MySQL headers/client library and required symbols.
+6. Configure CMake with explicit paths to that same bundled MySQL installation.
+7. Verify CMake did not select a distro `libmysqlclient`/MariaDB compatibility library.
+8. Compile AzerothCore.
+9. Install the resulting binaries and verify their runtime MySQL linkage.
+10. Download/install the selected AzerothCore client-data package.
 
 Later updates are normally incremental. The template triggers a clean build when structural settings such as the distribution, module list, build type, or CMake options require one.
 
@@ -382,6 +390,18 @@ Common causes include:
 - Custom CMake options that are no longer valid
 
 Temporarily remove additional modules and retry a clean rebuild if the failing file comes from `source/modules`.
+
+### Linker error: `mysql_stmt_bind_named_param`
+
+Current AzerothCore/Playerbots can use MySQL 8.4 client APIs such as `mysql_stmt_bind_named_param`. Template version 3 deliberately prevents the MySQL headers from one installation being combined with `libmysqlclient` from another.
+
+If you see an error similar to:
+
+```text
+undefined reference to `mysql_stmt_bind_named_param'
+```
+
+verify that the instance is using `cubecoders/ampbase:debian`, fetch the current template, and run **Update** again. The installer should now stop *before compilation* if CMake does not resolve both the headers and client library from the instance-local `mysql/` directory. On a fresh instance, do not add `default-libmysqlclient-dev` or `libmysql++-dev` manually.
 
 ### MySQL will not start
 

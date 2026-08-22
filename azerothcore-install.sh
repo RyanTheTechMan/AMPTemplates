@@ -74,7 +74,7 @@ esac
 [[ "$MYSQL_BUFFER_POOL_MB" =~ ^[0-9]+$ ]] || fail "MySQL buffer pool must be an integer"
 (( MYSQL_BUFFER_POOL_MB >= 256 )) || fail "MySQL buffer pool must be at least 256 MB"
 
-required_commands=(git cmake ninja clang clang++ ccache curl jq unzip tar xz sed awk grep find nproc ps sha256sum)
+required_commands=(git cmake ninja clang clang++ ccache curl jq unzip tar xz sed awk grep find nproc ps sha256sum nm ldd)
 for command_name in "${required_commands[@]}"; do
     command -v "$command_name" >/dev/null 2>&1 || fail "Required command '$command_name' is missing from the AMP container"
 done
@@ -242,6 +242,45 @@ install_mysql() {
     rm -rf "$BASE_DIR/mysql.previous" "$temporary_dir"
     printf '%s\n' "$target_version" > "$STATE_DIR/mysql-version"
     log "Installed MySQL $target_version"
+}
+
+find_mysql_client_library() {
+    local candidate
+    for candidate in \
+        "$MYSQL_DIR/lib/libmysqlclient.so" \
+        "$MYSQL_DIR/lib/libmysqlclient.so."*; do
+        if [[ -e "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    fail "Portable MySQL does not contain lib/libmysqlclient.so; reinstall MySQL or choose another MySQL release"
+}
+
+verify_portable_mysql_toolchain() {
+    local mysql_client_library mysql_config_version unresolved
+    [[ -x "$MYSQL_DIR/bin/mysql_config" ]] || fail "Portable MySQL is missing bin/mysql_config"
+    [[ -f "$MYSQL_DIR/include/mysql.h" ]] || fail "Portable MySQL is missing include/mysql.h"
+    mysql_client_library="$(find_mysql_client_library)"
+    mysql_config_version="$("$MYSQL_DIR/bin/mysql_config" --version 2>/dev/null || true)"
+    [[ -n "$mysql_config_version" ]] || fail "Portable MySQL mysql_config could not report its version"
+
+    log "MySQL build preflight: version $mysql_config_version"
+    log "MySQL build preflight: headers $MYSQL_DIR/include"
+    log "MySQL build preflight: client library $mysql_client_library"
+
+    # Current AzerothCore uses this MySQL 8.4 client symbol. Only require it when
+    # the selected source tree actually references it, which keeps historical refs usable.
+    if grep -q 'mysql_stmt_bind_named_param' "$SOURCE_DIR/src/server/database/Database/MySQLConnection.cpp" 2>/dev/null; then
+        if ! nm -D "$mysql_client_library" 2>/dev/null \
+            | grep -Eq '[[:space:]]mysql_stmt_bind_named_param(@@[^[:space:]]+)?$'; then
+            fail "The selected AzerothCore source requires mysql_stmt_bind_named_param, but the bundled MySQL client library does not export it. Use MySQL 8.4 or a compatible newer client library."
+        fi
+    fi
+
+    unresolved="$(LD_LIBRARY_PATH="$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}" ldd "$mysql_client_library" 2>/dev/null | grep 'not found' || true)"
+    [[ -z "$unresolved" ]] || fail "Portable MySQL client library has unresolved runtime dependencies: $unresolved"
+    printf '%s\n' "$mysql_client_library" > "$STATE_DIR/mysql-client-library"
 }
 
 mysql_server_args() {
@@ -464,11 +503,16 @@ prepare_modules() {
 }
 
 build_azerothcore() {
-    local structural_key previous_structural_key jobs core_commit
+    local structural_key previous_structural_key jobs core_commit mysql_version mysql_client_library
+    mysql_version="$(read_state_value "$STATE_DIR/mysql-version")"
+    mysql_client_library="$(read_state_value "$STATE_DIR/mysql-client-library")"
+    [[ -n "$mysql_client_library" && -e "$mysql_client_library" ]] \
+        || mysql_client_library="$(find_mysql_client_library)"
     structural_key="$(printf '%s\n' \
         "$DISTRIBUTION" "$CORE_REPOSITORY" "$CORE_REF" "$PLAYERBOTS_ENABLED" \
         "$PLAYERBOTS_REPOSITORY" "$PLAYERBOTS_REF" "$ADDITIONAL_MODULES" \
-        "$BUILD_TYPE" "$EXTRA_CMAKE_OPTIONS" | sha256sum | awk '{print $1}')"
+        "$BUILD_TYPE" "$EXTRA_CMAKE_OPTIONS" "$mysql_version" "$mysql_client_library" \
+        | sha256sum | awk '{print $1}')"
     previous_structural_key="$(read_state_value "$STATE_DIR/build-structure-key")"
 
     if is_true "$FORCE_CLEAN_BUILD" || [[ "$structural_key" != "$previous_structural_key" ]]; then
@@ -505,6 +549,11 @@ build_azerothcore() {
         -DCMAKE_C_COMPILER_LAUNCHER=ccache
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
         "-DMYSQL_ROOT_DIR=$MYSQL_DIR"
+        "-DMYSQL_CONFIG=$MYSQL_DIR/bin/mysql_config"
+        "-DMYSQL_CONFIG_PREFER_PATH=$MYSQL_DIR/bin"
+        "-DMYSQL_INCLUDE_DIR=$MYSQL_DIR/include"
+        "-DMYSQL_LIBRARY=$mysql_client_library"
+        "-DMYSQL_EXECUTABLE=$MYSQL_DIR/bin/mysql"
     )
     if [[ -n "$EXTRA_CMAKE_OPTIONS" ]]; then
         local -a extra_options=()
@@ -513,7 +562,19 @@ build_azerothcore() {
     fi
 
     log "Configuring AzerothCore ($BUILD_TYPE)"
+    log "Forcing CMake MySQL headers to $MYSQL_DIR/include"
+    log "Forcing CMake MySQL client library to $mysql_client_library"
     cmake -S "$SOURCE_DIR" -B "$BUILD_DIR" "${cmake_options[@]}"
+
+    local cached_mysql_library cached_mysql_include
+    cached_mysql_library="$(sed -n 's/^MYSQL_LIBRARY:[^=]*=//p' "$BUILD_DIR/CMakeCache.txt" | tail -n1)"
+    cached_mysql_include="$(sed -n 's/^MYSQL_INCLUDE_DIR:[^=]*=//p' "$BUILD_DIR/CMakeCache.txt" | tail -n1)"
+    [[ "$cached_mysql_library" == "$mysql_client_library" ]] \
+        || fail "CMake selected the wrong MySQL library: '${cached_mysql_library:-unset}' (expected '$mysql_client_library')"
+    [[ "$cached_mysql_include" == "$MYSQL_DIR/include" ]] \
+        || fail "CMake selected the wrong MySQL headers: '${cached_mysql_include:-unset}' (expected '$MYSQL_DIR/include')"
+
+    log "CMake MySQL selection verified before compilation"
     log "Compiling AzerothCore with $jobs parallel job(s)"
     cmake --build "$BUILD_DIR" --config "$BUILD_TYPE" --parallel "$jobs"
     log "Installing AzerothCore into $DIST_DIR"
@@ -521,6 +582,18 @@ build_azerothcore() {
 
     [[ -x "$DIST_DIR/bin/authserver" ]] || fail "Build completed without dist/bin/authserver"
     [[ -x "$DIST_DIR/bin/worldserver" ]] || fail "Build completed without dist/bin/worldserver"
+
+    local server_binary linked_mysql unresolved_runtime
+    for server_binary in "$DIST_DIR/bin/authserver" "$DIST_DIR/bin/worldserver"; do
+        unresolved_runtime="$(LD_LIBRARY_PATH="$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}" ldd "$server_binary" 2>/dev/null | grep 'not found' || true)"
+        [[ -z "$unresolved_runtime" ]] \
+            || fail "$(basename "$server_binary") has unresolved runtime libraries: $unresolved_runtime"
+        linked_mysql="$(LD_LIBRARY_PATH="$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}" ldd "$server_binary" 2>/dev/null \
+            | awk '/libmysqlclient\.so/{print $3; exit}')"
+        [[ -n "$linked_mysql" && "$linked_mysql" == "$MYSQL_DIR/lib/"* ]] \
+            || fail "$(basename "$server_binary") is not resolving libmysqlclient from the bundled MySQL installation (resolved '${linked_mysql:-none}')"
+    done
+    log "Installed server binaries verified against bundled MySQL client library"
 
     mkdir -p "$DIST_DIR/etc" "$DIST_DIR/etc/modules" "$DIST_DIR/bin" "$BASE_DIR/logs"
     local config_dist config_live
@@ -630,6 +703,7 @@ MYSQL_STARTED_HERE="false"
 MYSQL_PID=""
 prepare_core_repository
 prepare_modules
+verify_portable_mysql_toolchain
 build_azerothcore
 install_client_data
 

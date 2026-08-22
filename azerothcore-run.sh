@@ -185,6 +185,19 @@ export AC_FORCE_CREATE_DB="${AC_FORCE_CREATE_DB:-1}"
 export AC_UPDATES_ENABLE_DATABASES="${AC_UPDATES_ENABLE_DATABASES:-7}"
 export AC_DISABLE_INTERACTIVE="${AC_DISABLE_INTERACTIVE:-1}"
 
+verify_runtime_mysql_linkage() {
+    local server_binary linked_mysql unresolved_runtime
+    for server_binary in "$BIN_DIR/authserver" "$BIN_DIR/worldserver"; do
+        unresolved_runtime="$(ldd "$server_binary" 2>/dev/null | grep 'not found' || true)"
+        [[ -z "$unresolved_runtime" ]] \
+            || fail "$(basename "$server_binary") has unresolved runtime libraries: $unresolved_runtime"
+        linked_mysql="$(ldd "$server_binary" 2>/dev/null | awk '/libmysqlclient\.so/{print $3; exit}')"
+        [[ -n "$linked_mysql" && "$linked_mysql" == "$MYSQL_DIR/lib/"* ]] \
+            || fail "$(basename "$server_binary") is not using the bundled MySQL client library (resolved '${linked_mysql:-none}'). Run Update to rebuild the server."
+    done
+}
+verify_runtime_mysql_linkage
+
 configure_server_files() {
     local database_auth database_world database_characters database_playerbots playerbots_config
     local start_money_gold start_money_copper cross_faction_value chat_feed_value
