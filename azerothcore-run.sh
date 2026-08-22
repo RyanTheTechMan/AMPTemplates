@@ -3,12 +3,22 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 027
 
+LAUNCHER_LOG=""
+
 log() {
-    printf '[AMP/AzerothCore] %s\n' "$*"
+    local message="$*"
+    printf '[AMP/AzerothCore] %s\n' "$message"
+    if [[ -n "${LAUNCHER_LOG:-}" ]]; then
+        printf '%s [AMP/AzerothCore] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$message" >> "$LAUNCHER_LOG" 2>/dev/null || true
+    fi
 }
 
 fail() {
-    printf '[AMP/AzerothCore] ERROR: %s\n' "$*" >&2
+    local message="$*"
+    printf '[AMP/AzerothCore] ERROR: %s\n' "$message" >&2
+    if [[ -n "${LAUNCHER_LOG:-}" ]]; then
+        printf '%s [AMP/AzerothCore] ERROR: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$message" >> "$LAUNCHER_LOG" 2>/dev/null || true
+    fi
     exit 1
 }
 
@@ -138,7 +148,6 @@ MYSQL_RUN_DIR="$BASE_DIR/run/mysqld"
 MYSQL_LOG_DIR="$BASE_DIR/logs/mysql"
 MYSQL_SOCKET="$MYSQL_RUN_DIR/mysqld.sock"
 MYSQL_PID_FILE="$MYSQL_RUN_DIR/mysqld.pid"
-WORLD_STDIN_FIFO="$BASE_DIR/run/worldserver.stdin"
 MYSQL_BUFFER_POOL_MB="$(numeric_or_default "${AMP_ACORE_MYSQL_BUFFER_POOL_MB:-1024}" 1024)"
 METRICS_INTERVAL_SECONDS="$(numeric_or_default "${AMP_ACORE_METRICS_INTERVAL_SECONDS:-60}" 60)"
 if (( METRICS_INTERVAL_SECONDS < 10 )); then
@@ -159,6 +168,11 @@ REALM_LOCAL_ADDRESS="${AMP_ACORE_REALM_LOCAL_ADDRESS:-127.0.0.1}"
 REALM_LOCAL_SUBNET_MASK="${AMP_ACORE_REALM_LOCAL_SUBNET_MASK:-255.255.255.0}"
 DATABASE_USER="$(id -un)"
 
+mkdir -p "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" "$BASE_DIR/logs" "$BASE_DIR/temp" "$BASE_DIR/run"
+LAUNCHER_LOG="$BASE_DIR/logs/amp-launcher.log"
+touch "$LAUNCHER_LOG" 2>/dev/null || true
+log "Launcher v5 starting as user $DATABASE_USER (PID $$)"
+
 [[ -x "$BIN_DIR/authserver" ]] || fail "authserver is not installed; run Update first"
 [[ -x "$BIN_DIR/worldserver" ]] || fail "worldserver is not installed; run Update first"
 [[ -x "$MYSQL_DIR/bin/mysqld" ]] || fail "MySQL is not installed; run Update first"
@@ -168,7 +182,6 @@ DATABASE_USER="$(id -un)"
 [[ -d "$BIN_DIR/dbc" && -d "$BIN_DIR/maps" && -d "$BIN_DIR/vmaps" && -d "$BIN_DIR/mmaps" ]] \
     || fail "Required client data is missing from dist/bin; enable client-data installation or provide extracted data"
 
-mkdir -p "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" "$BASE_DIR/logs" "$BASE_DIR/temp" "$BASE_DIR/run"
 export PATH="$MYSQL_DIR/bin:$PATH"
 export LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}"
 export AC_LOGIN_DATABASE_INFO=".;$MYSQL_SOCKET;$DATABASE_USER;;acore_auth"
@@ -351,7 +364,6 @@ configure_server_files() {
 MYSQL_PID=""
 AUTH_PID=""
 WORLD_PID=""
-STDIN_PID=""
 READY_PID=""
 METRICS_PID=""
 CLEANED_UP="false"
@@ -402,7 +414,7 @@ start_mysql() {
             log "MySQL is ready"
             return
         fi
-        if ! kill -0 "$MYSQL_PID" 2>/dev/null; then
+        if ! process_is_running "$MYSQL_PID"; then
             tail -n 100 "$MYSQL_LOG_DIR/mysql-error.log" >&2 || true
             fail "MySQL exited during startup"
         fi
@@ -435,7 +447,7 @@ wait_for_auth_database() {
             --batch --skip-column-names -e 'SELECT id FROM acore_auth.realmlist LIMIT 1' >/dev/null 2>&1; then
             return
         fi
-        if [[ -n "$AUTH_PID" ]] && ! kill -0 "$AUTH_PID" 2>/dev/null; then
+        if [[ -n "$AUTH_PID" ]] && ! process_is_running "$AUTH_PID"; then
             ((dead_checks+=1))
             if (( dead_checks > 10 )); then
                 wait "$AUTH_PID" 2>/dev/null || true
@@ -535,7 +547,7 @@ emit_metrics() {
 
 start_metrics_monitor() {
     (
-        while kill -0 "$WORLD_PID" 2>/dev/null; do
+        while process_is_running "$WORLD_PID"; do
             emit_metrics
             sleep "$METRICS_INTERVAL_SECONDS"
         done
@@ -543,18 +555,33 @@ start_metrics_monitor() {
     METRICS_PID=$!
 }
 
+process_is_running() {
+    local pid="$1" state
+    [[ -n "$pid" ]] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    state="$(ps -o stat= -p "$pid" 2>/dev/null | awk '{print $1}')"
+    [[ "$state" != Z* ]]
+}
+
 stop_pid_gracefully() {
     local pid="$1" name="$2" timeout_count="${3:-30}"
     [[ -n "$pid" ]] || return
-    kill -0 "$pid" 2>/dev/null || return
+    if ! process_is_running "$pid"; then
+        wait "$pid" 2>/dev/null || true
+        return
+    fi
     log "Stopping $name"
     kill -TERM "$pid" 2>/dev/null || true
     while (( timeout_count-- > 0 )); do
-        kill -0 "$pid" 2>/dev/null || return
+        if ! process_is_running "$pid"; then
+            wait "$pid" 2>/dev/null || true
+            return
+        fi
         sleep 1
     done
     log "$name did not stop in time; sending SIGKILL"
     kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
 }
 
 cleanup() {
@@ -573,11 +600,6 @@ cleanup() {
     fi
     stop_pid_gracefully "$WORLD_PID" "worldserver" 60
     stop_pid_gracefully "$AUTH_PID" "authserver" 30
-    if [[ -n "$STDIN_PID" ]]; then
-        kill "$STDIN_PID" 2>/dev/null || true
-        wait "$STDIN_PID" 2>/dev/null || true
-    fi
-    rm -f "$WORLD_STDIN_FIFO"
 
     if mysql_ready; then
         log "Stopping MySQL"
@@ -611,27 +633,39 @@ start_authserver
 wait_for_auth_database
 update_realm_record
 
-if [[ -z "$AUTH_PID" ]] || ! kill -0 "$AUTH_PID" 2>/dev/null; then
-    log "Restarting authserver after first-run database initialization"
-    AUTH_PID=""
-    start_authserver
-    sleep 2
-    kill -0 "$AUTH_PID" 2>/dev/null || fail "authserver failed to restart"
+# The first authserver run doubles as the authentication-schema bootstrap.
+# Restart it unconditionally after the realm row exists so RealmList is loaded
+# from a known-good database state instead of depending on first-run timing.
+if process_is_running "$AUTH_PID"; then
+    log "Restarting authserver after database/realm bootstrap"
+    stop_pid_gracefully "$AUTH_PID" "bootstrap authserver" 30
+else
+    wait "$AUTH_PID" 2>/dev/null || true
+fi
+AUTH_PID=""
+start_authserver
+sleep 2
+if ! process_is_running "$AUTH_PID"; then
+    tail -n 120 "$BASE_DIR/logs/Server.log" >&2 2>/dev/null || true
+    tail -n 120 "$BASE_DIR/logs/Errors.log" >&2 2>/dev/null || true
+    fail "authserver failed to stay running after database/realm bootstrap"
 fi
 
-rm -f "$WORLD_STDIN_FIFO"
-mkfifo "$WORLD_STDIN_FIFO"
-cat > "$WORLD_STDIN_FIFO" &
-STDIN_PID=$!
-
-log "Starting worldserver"
-"$BIN_DIR/worldserver" -c "$ETC_DIR/worldserver.conf" < "$WORLD_STDIN_FIFO" &
+log "Starting worldserver (AMP console input is attached directly to worldserver stdin)"
+# Explicit <&0 prevents Bash's asynchronous-command /dev/null stdin behavior,
+# allowing AMP's writable console and ExitString to reach worldserver directly.
+"$BIN_DIR/worldserver" -c "$ETC_DIR/worldserver.conf" <&0 &
 WORLD_PID=$!
 
 (
     timeout_count=3600
     while (( timeout_count-- > 0 )); do
-        if ! kill -0 "$WORLD_PID" 2>/dev/null; then
+        if ! process_is_running "$AUTH_PID"; then
+            printf '[AMP/AzerothCore] ERROR: authserver exited while worldserver was starting\n' >&2
+            kill -TERM "$WORLD_PID" 2>/dev/null || true
+            exit 1
+        fi
+        if ! process_is_running "$WORLD_PID"; then
             exit 1
         fi
         if port_is_open 127.0.0.1 "$WORLD_PORT"; then
@@ -654,6 +688,11 @@ set -e
 WORLD_PID=""
 
 log "worldserver exited with status $WORLD_STATUS"
+if (( WORLD_STATUS != 0 )); then
+    log "Recent AzerothCore logs after unexpected worldserver exit:"
+    tail -n 160 "$BASE_DIR/logs/Server.log" >&2 2>/dev/null || true
+    tail -n 160 "$BASE_DIR/logs/Errors.log" >&2 2>/dev/null || true
+fi
 cleanup
 trap - EXIT
 exit "$WORLD_STATUS"

@@ -333,7 +333,7 @@ build/            CMake build tree
 dist/             installed AzerothCore runtime
 mysql/            portable MySQL installation
 mysql-data/       MySQL data directory
-logs/             server logs
+logs/             server logs, including amp-launcher.log
 temp/             temporary runtime files
 state/            template installation/build state
 ```
@@ -395,7 +395,7 @@ Temporarily remove additional modules and retry a clean rebuild if the failing f
 
 ### Linker error: `mysql_stmt_bind_named_param`
 
-Current AzerothCore/Playerbots can use MySQL 8.4 client APIs such as `mysql_stmt_bind_named_param`. Template version 3 deliberately prevents the MySQL headers from one installation being combined with `libmysqlclient` from another.
+Current AzerothCore/Playerbots can use MySQL 8.4 client APIs such as `mysql_stmt_bind_named_param`. Current template versions deliberately prevent the MySQL headers from one installation being combined with `libmysqlclient` from another.
 
 If you see an error similar to:
 
@@ -404,6 +404,18 @@ undefined reference to `mysql_stmt_bind_named_param'
 ```
 
 verify that the instance is using `cubecoders/ampbase:debian`, fetch the current template, and run **Update** again. The installer should now stop *before compilation* if CMake does not resolve both the headers and client library from the instance-local `mysql/` directory. On a fresh instance, do not add `default-libmysqlclient-dev` or `libmysql++-dev` manually.
+
+### AMP reports `GenericApp.DoAppStartup` / `NullReferenceException` after Update succeeds
+
+Template v5 no longer asks AMP to promote `worldserver` to the monitored process. The long-lived `azerothcore-run.sh` launcher is now the process AMP tracks while it starts MySQL, performs first-run database work, starts `authserver`, and finally launches `worldserver`. This avoids AMP timing out while waiting for a child process that does not exist yet during database bootstrap.
+
+If a current v5 instance still exits during startup, inspect both the application console and:
+
+```text
+logs/amp-launcher.log
+```
+
+The launcher now records its own lifecycle/failure messages there and prints recent AzerothCore logs when a managed server exits unexpectedly. The ADS webserver `WebSocketException` / `OperationCanceledException` messages that can appear when a browser tab reconnects are separate from the game-server process and are not, by themselves, evidence that AzerothCore failed.
 
 ### MySQL will not start
 
