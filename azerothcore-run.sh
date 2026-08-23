@@ -148,6 +148,10 @@ MYSQL_RUN_DIR="$BASE_DIR/run/mysqld"
 MYSQL_LOG_DIR="$BASE_DIR/logs/mysql"
 MYSQL_SOCKET="$MYSQL_RUN_DIR/mysqld.sock"
 MYSQL_PID_FILE="$MYSQL_RUN_DIR/mysqld.pid"
+STATE_DIR="$BASE_DIR/.amp-state"
+OPENSSL_CONF_FILE="$STATE_DIR/openssl-azerothcore.cnf"
+READY_MARKER="$BASE_DIR/run/worldserver.ready"
+READY_STABILITY_SECONDS=10
 MYSQL_BUFFER_POOL_MB="$(numeric_or_default "${AMP_ACORE_MYSQL_BUFFER_POOL_MB:-1024}" 1024)"
 METRICS_INTERVAL_SECONDS="$(numeric_or_default "${AMP_ACORE_METRICS_INTERVAL_SECONDS:-60}" 60)"
 if (( METRICS_INTERVAL_SECONDS < 10 )); then
@@ -169,7 +173,7 @@ REALM_LOCAL_SUBNET_MASK="${AMP_ACORE_REALM_LOCAL_SUBNET_MASK:-255.255.255.0}"
 MYSQL_ADMIN_USER="$(id -un)"
 DATABASE_USER="$MYSQL_ADMIN_USER"
 
-mkdir -p "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" "$BASE_DIR/logs" "$BASE_DIR/temp" "$BASE_DIR/run"
+mkdir -p "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" "$BASE_DIR/logs" "$BASE_DIR/temp" "$BASE_DIR/run" "$STATE_DIR"
 chmod 700 "$MYSQL_RUN_DIR" 2>/dev/null || true
 LAUNCHER_LOG="$BASE_DIR/logs/amp-launcher.log"
 touch "$LAUNCHER_LOG" 2>/dev/null || true
@@ -206,6 +210,11 @@ export AC_BIND_IP="${AC_BIND_IP:-0.0.0.0}"
 export AC_FORCE_CREATE_DB="${AC_FORCE_CREATE_DB:-1}"
 export AC_UPDATES_ENABLE_DATABASES="${AC_UPDATES_ENABLE_DATABASES:-7}"
 export AC_DISABLE_INTERACTIVE="${AC_DISABLE_INTERACTIVE:-1}"
+# AMP checkbox substitutions may arrive as true/false strings. These two AzerothCore
+# settings are read as integers, so normalize them before AzerothCore's environment
+# override layer sees them.
+export AC_SERVER_LOGIN_INFO="$(boolean_number "${AC_SERVER_LOGIN_INFO:-0}")"
+export AC_AI_PLAYERBOT_ADD_CLASS_COMMAND="$(boolean_number "${AC_AI_PLAYERBOT_ADD_CLASS_COMMAND:-1}")"
 
 verify_runtime_mysql_linkage() {
     local server_binary linked_mysql unresolved_runtime mysql_unresolved
@@ -222,6 +231,56 @@ verify_runtime_mysql_linkage() {
     done
 }
 verify_runtime_mysql_linkage
+
+prepare_openssl_runtime() {
+    local provider_output cipher_output
+    command -v openssl >/dev/null 2>&1 || fail "OpenSSL CLI is missing from the container"
+
+    cat > "$OPENSSL_CONF_FILE" <<'EOF'
+# AzerothCore 3.3.5a still uses RC4 for the WoW protocol. Under OpenSSL 3,
+# RC4 is supplied by the legacy provider, while the rest of AzerothCore still
+# needs the normal default provider. Keep this configuration private to this
+# AMP instance instead of modifying Debian's global OpenSSL configuration.
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = provider_sect
+
+[provider_sect]
+default = default_sect
+legacy = legacy_sect
+
+[default_sect]
+activate = 1
+
+[legacy_sect]
+activate = 1
+EOF
+    chmod 600 "$OPENSSL_CONF_FILE" 2>/dev/null || true
+
+    provider_output="$(OPENSSL_CONF="$OPENSSL_CONF_FILE" openssl list -providers 2>&1)" \
+        || fail "OpenSSL could not load the AzerothCore provider configuration"
+    grep -Eq '^[[:space:]]+default[[:space:]]*$' <<< "$provider_output" \
+        || fail "OpenSSL default provider did not activate"
+    grep -Eq '^[[:space:]]+legacy[[:space:]]*$' <<< "$provider_output" \
+        || fail "OpenSSL legacy provider did not activate; RC4 required by WoW 3.3.5a is unavailable"
+
+    cipher_output="$(OPENSSL_CONF="$OPENSSL_CONF_FILE" openssl list -cipher-algorithms 2>&1)" \
+        || fail "OpenSSL could not enumerate ciphers with the AzerothCore provider configuration"
+    grep -Eq '(^|[[:space:]])RC4([[:space:]-]|$)' <<< "$cipher_output" \
+        || fail "OpenSSL legacy provider loaded but RC4 was not available"
+
+    # Exercise the same legacy cipher through EVP before starting a server. This
+    # catches provider/module problems before worldserver reaches its ARC4 ASSERT.
+    if ! printf 'amp-azerothcore-rc4-preflight' \
+        | OPENSSL_CONF="$OPENSSL_CONF_FILE" openssl enc -rc4 \
+            -K 00112233445566778899aabbccddeeff -nosalt >/dev/null 2>&1; then
+        fail "OpenSSL RC4 preflight failed; AzerothCore would crash during ARC4 initialization"
+    fi
+
+    export OPENSSL_CONF="$OPENSSL_CONF_FILE"
+    log "OpenSSL runtime verified: default + legacy providers active, RC4 available"
+}
 
 configure_server_files() {
     local database_auth database_world database_characters database_playerbots playerbots_config
@@ -248,6 +307,7 @@ configure_server_files() {
     set_conf_value "$ETC_DIR/authserver.conf" "MySQLExecutable" "$(config_string "$MYSQL_DIR/bin/mysql")"
     set_conf_value "$ETC_DIR/authserver.conf" "Updates.AutoSetup" "1"
     set_conf_value "$ETC_DIR/authserver.conf" "Updates.EnableDatabases" "1"
+    set_conf_value_if_present "$ETC_DIR/authserver.conf" "ProcessPriority" "0"
     set_conf_value_if_present "$ETC_DIR/authserver.conf" "StrictVersionCheck" "$(boolean_number "${AMP_ACORE_STRICT_VERSION_CHECK:-0}")"
     set_conf_value_if_present "$ETC_DIR/authserver.conf" "WrongPass.MaxCount" "${AMP_ACORE_WRONG_PASS_MAX_COUNT:-0}"
     set_conf_value_if_present "$ETC_DIR/authserver.conf" "WrongPass.BanTime" "${AMP_ACORE_WRONG_PASS_BAN_TIME:-600}"
@@ -317,6 +377,7 @@ configure_server_files() {
     set_conf_value_if_present "$ETC_DIR/worldserver.conf" "Allow.IP.Based.Action.Logging" "$(boolean_number "${AC_ALLOW_IP_BASED_ACTION_LOGGING:-0}")"
     set_conf_value_if_present "$ETC_DIR/worldserver.conf" "MaxCoreStuckTime" "${AC_MAX_CORE_STUCK_TIME:-0}"
     set_conf_value_if_present "$ETC_DIR/worldserver.conf" "ThreadPool" "${AC_THREAD_POOL:-2}"
+    set_conf_value_if_present "$ETC_DIR/worldserver.conf" "ProcessPriority" "0"
     set_conf_value_if_present "$ETC_DIR/worldserver.conf" "Compression" "${AC_COMPRESSION:-1}"
     set_conf_value "$ETC_DIR/worldserver.conf" "MapUpdate.Threads" "${AC_MAP_UPDATE_THREADS:-1}"
     set_conf_value "$ETC_DIR/worldserver.conf" "Network.Threads" "${AC_NETWORK_THREADS:-1}"
@@ -535,21 +596,49 @@ mysql_scalar() {
         --batch --skip-column-names --connect-timeout=3 -e "$query" 2>/dev/null | head -n1
 }
 
+installed_report_value() {
+    local field="$1"
+    [[ -f "$BASE_DIR/AMP-INSTALLED-VERSION.txt" ]] || return 0
+    sed -n "s/^${field}:[[:space:]]*//p" "$BASE_DIR/AMP-INSTALLED-VERSION.txt" | head -n1
+}
+
 emit_server_info() {
-    local state_dir distribution core_ref core_commit modules client_data mysql_version modules_list
-    state_dir="$BASE_DIR/.amp-state"
-    distribution="$(cat "$state_dir/distribution" 2>/dev/null || printf 'unknown')"
-    core_ref="$(cat "$state_dir/core-ref" 2>/dev/null || printf 'unknown')"
-    core_commit="$(cat "$state_dir/core-commit" 2>/dev/null || printf 'unknown')"
+    local distribution core_ref core_commit modules client_data mysql_version modules_list report_modules
+
+    distribution="$(cat "$STATE_DIR/distribution" 2>/dev/null || true)"
+    [[ -n "$distribution" ]] || distribution="$(installed_report_value 'Distribution')"
+    [[ -n "$distribution" ]] || distribution="unknown"
+
+    core_ref="$(cat "$STATE_DIR/core-ref" 2>/dev/null || true)"
+    [[ -n "$core_ref" ]] || core_ref="$(installed_report_value 'Core ref')"
+    [[ -n "$core_ref" ]] || core_ref="unknown"
+
+    core_commit="$(cat "$STATE_DIR/core-commit" 2>/dev/null || true)"
+    [[ -n "$core_commit" ]] || core_commit="$(installed_report_value 'Core commit')"
+    [[ -n "$core_commit" ]] || core_commit="unknown"
     core_commit="${core_commit:0:12}"
-    modules_list="$(cat "$state_dir/managed-modules" 2>/dev/null || true)"
+
+    modules_list="$(cat "$STATE_DIR/managed-modules" 2>/dev/null || true)"
     if [[ -n "$modules_list" ]]; then
         modules="$(printf '%s\n' "$modules_list" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+    elif [[ -f "$BASE_DIR/AMP-INSTALLED-VERSION.txt" ]]; then
+        report_modules="$(grep -c '^  - ' "$BASE_DIR/AMP-INSTALLED-VERSION.txt" 2>/dev/null || true)"
+        modules="${report_modules:-0}"
     else
         modules=0
     fi
-    client_data="$(cat "$state_dir/client-data-version" 2>/dev/null || printf 'manual')"
-    mysql_version="$(cat "$state_dir/mysql-version" 2>/dev/null || printf 'unknown')"
+
+    client_data="$(cat "$STATE_DIR/client-data-version" 2>/dev/null || true)"
+    [[ -n "$client_data" ]] || client_data="$(installed_report_value 'Client data')"
+    [[ -n "$client_data" ]] || client_data="manual"
+
+    mysql_version="$(cat "$STATE_DIR/mysql-version" 2>/dev/null || true)"
+    [[ -n "$mysql_version" ]] || mysql_version="$(installed_report_value 'MySQL version')"
+    if [[ -z "$mysql_version" && -x "$MYSQL_DIR/bin/mysqld" ]]; then
+        mysql_version="$("$MYSQL_DIR/bin/mysqld" --version 2>/dev/null | sed -n 's/.*Ver \([0-9][0-9.]*\).*/\1/p' | head -n1)"
+    fi
+    [[ -n "$mysql_version" ]] || mysql_version="unknown"
+
     printf 'AMP_AZEROTHCORE_INFO Distribution=%s CoreRef=%s CoreCommit=%s Modules=%s ClientData=%s MySQL=%s\n' \
         "$(sanitize_info_value "$distribution")" \
         "$(sanitize_info_value "$core_ref")" \
@@ -582,6 +671,14 @@ emit_metrics() {
 
 start_metrics_monitor() {
     (
+        while process_is_running "$WORLD_PID" && [[ ! -f "$READY_MARKER" ]]; do
+            sleep 1
+        done
+        process_is_running "$WORLD_PID" || exit 0
+
+        # Keep first-boot SQL/import output readable and avoid metrics being spliced
+        # into database updater lines. Metrics begin only after AMP readiness.
+        sleep "$METRICS_INTERVAL_SECONDS"
         while process_is_running "$WORLD_PID"; do
             emit_metrics
             sleep "$METRICS_INTERVAL_SECONDS"
@@ -624,6 +721,7 @@ cleanup() {
         return
     fi
     CLEANED_UP="true"
+    rm -f "$READY_MARKER" 2>/dev/null || true
 
     if [[ -n "$READY_PID" ]]; then
         kill "$READY_PID" 2>/dev/null || true
@@ -663,6 +761,7 @@ start_mysql
 verify_azerothcore_database_socket
 create_databases
 configure_server_files
+prepare_openssl_runtime
 
 cd "$BIN_DIR"
 start_authserver
@@ -687,6 +786,7 @@ if ! process_is_running "$AUTH_PID"; then
     fail "authserver failed to stay running after database/realm bootstrap"
 fi
 
+rm -f "$READY_MARKER" 2>/dev/null || true
 log "Starting worldserver (AMP console input is attached directly to worldserver stdin)"
 # Explicit <&0 prevents Bash's asynchronous-command /dev/null stdin behavior,
 # allowing AMP's writable console and ExitString to reach worldserver directly.
@@ -705,7 +805,17 @@ WORLD_PID=$!
             exit 1
         fi
         if port_is_open 127.0.0.1 "$WORLD_PORT"; then
+            stable_count="$READY_STABILITY_SECONDS"
+            while (( stable_count-- > 0 )); do
+                if ! process_is_running "$AUTH_PID" || ! process_is_running "$WORLD_PID" \
+                    || ! port_is_open 127.0.0.1 "$WORLD_PORT"; then
+                    printf '[AMP/AzerothCore] ERROR: worldserver became unhealthy during the %ss readiness grace period\n' "$READY_STABILITY_SECONDS" >&2
+                    exit 1
+                fi
+                sleep 1
+            done
             emit_server_info
+            touch "$READY_MARKER"
             printf 'AMP_AZEROTHCORE_READY\n'
             exit 0
         fi

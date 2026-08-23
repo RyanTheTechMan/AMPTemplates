@@ -558,3 +558,13 @@ When reporting a problem with the AMP template, include:
 - Whether AMP is running on Linux or Windows with Docker
 
 Do not include database passwords, account passwords, or other secrets in public issue reports.
+## Debian 13 / OpenSSL legacy provider
+
+WoW 3.3.5a still uses RC4 for its network encryption. AzerothCore's ARC4 wrapper fetches `RC4` through OpenSSL EVP; on OpenSSL 3 the cipher is supplied by the **legacy** provider rather than the default provider. The AMP launcher therefore creates an instance-local OpenSSL configuration that activates both `default` and `legacy`, verifies that RC4 can actually encrypt a test payload, and only then starts `authserver`/`worldserver`. It does not modify Debian's global OpenSSL configuration.
+
+If startup reports an OpenSSL provider or RC4 preflight failure, do not disable the check. Confirm the Debian `openssl` package is installed and that the container contains the legacy provider module. A healthy launch prints `OpenSSL runtime verified: default + legacy providers active, RC4 available`.
+
+## First boot and port status
+
+A new instance can spend several minutes importing the Character, World, and Playerbots databases. During that import it is normal for AMP to show the Authentication port listening while the World port is still not listening. The template now waits until the configured World port is open **and remains healthy for 10 seconds** before emitting `AMP_AZEROTHCORE_READY`; AMP metrics also remain quiet until that point so they do not splice into first-boot SQL output.
+

@@ -787,6 +787,15 @@ verify_portable_mysql_toolchain
 build_azerothcore
 install_client_data
 
+# Keep the human-readable report useful to both users and the launcher even if
+# an older instance is missing one of the .amp-state metadata files.
+{
+    mysql_report_version="$(read_state_value "$STATE_DIR/mysql-version")"
+    client_report_version="$(read_state_value "$STATE_DIR/client-data-version")"
+    [[ -n "$mysql_report_version" ]] && printf 'MySQL version: %s\n' "$mysql_report_version"
+    [[ -n "$client_report_version" ]] && printf 'Client data: %s\n' "$client_report_version"
+} >> "$BASE_DIR/AMP-INSTALLED-VERSION.txt"
+
 log "Installation/update complete"
 log "Installed version details:"
 sed 's/^/[AMP\/AzerothCore installer]   /' "$BASE_DIR/AMP-INSTALLED-VERSION.txt"
