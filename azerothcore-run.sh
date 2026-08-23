@@ -166,12 +166,14 @@ if [[ "$REALM_ADDRESS_MODE" == "manual" && -n "$MANUAL_REALM_ADDRESS" ]]; then
 fi
 REALM_LOCAL_ADDRESS="${AMP_ACORE_REALM_LOCAL_ADDRESS:-127.0.0.1}"
 REALM_LOCAL_SUBNET_MASK="${AMP_ACORE_REALM_LOCAL_SUBNET_MASK:-255.255.255.0}"
-DATABASE_USER="$(id -un)"
+MYSQL_ADMIN_USER="$(id -un)"
+DATABASE_USER="$MYSQL_ADMIN_USER"
 
 mkdir -p "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" "$BASE_DIR/logs" "$BASE_DIR/temp" "$BASE_DIR/run"
+chmod 700 "$MYSQL_RUN_DIR" 2>/dev/null || true
 LAUNCHER_LOG="$BASE_DIR/logs/amp-launcher.log"
 touch "$LAUNCHER_LOG" 2>/dev/null || true
-log "Launcher v5 starting as user $DATABASE_USER (PID $$)"
+log "Launcher v6 starting as user $MYSQL_ADMIN_USER (PID $$)"
 
 [[ -x "$BIN_DIR/authserver" ]] || fail "authserver is not installed; run Update first"
 [[ -x "$BIN_DIR/worldserver" ]] || fail "worldserver is not installed; run Update first"
@@ -184,6 +186,11 @@ log "Launcher v5 starting as user $DATABASE_USER (PID $$)"
 
 export PATH="$MYSQL_DIR/bin:$PATH"
 export LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}"
+# Keep the documented private-socket path in AzerothCore's DB strings. Current
+# AzerothCore mutates the "." socket marker to "localhost" after the first pool
+# connection; MYSQL_UNIX_PORT makes the resulting C-client fallback use this
+# same private socket instead of /tmp/mysql.sock.
+export MYSQL_UNIX_PORT="$MYSQL_SOCKET"
 export AC_LOGIN_DATABASE_INFO=".;$MYSQL_SOCKET;$DATABASE_USER;;acore_auth"
 export AC_WORLD_DATABASE_INFO=".;$MYSQL_SOCKET;$DATABASE_USER;;acore_world"
 export AC_CHARACTER_DATABASE_INFO=".;$MYSQL_SOCKET;$DATABASE_USER;;acore_characters"
@@ -227,6 +234,8 @@ configure_server_files() {
     start_money_copper=$((start_money_gold * 10000))
     cross_faction_value="$(boolean_number "${AMP_ACORE_ALLOW_CROSS_FACTION_INTERACTION:-0}")"
     chat_feed_value="$(boolean_number "${AMP_ACORE_ENABLE_CHAT_FEED:-0}")"
+
+    log "Configuring AzerothCore databases through Unix socket $MYSQL_SOCKET as OS/MySQL user '$DATABASE_USER' (auth_socket, no password)"
 
     # Current AzerothCore reads AC_* environment variables. Writing the live config too
     # keeps historical source choices and module branches compatible. Less-common options
@@ -394,7 +403,33 @@ mysql_server_args() {
 }
 
 mysql_ready() {
-    "$MYSQL_DIR/bin/mysqladmin" --protocol=socket --socket="$MYSQL_SOCKET" --user="$DATABASE_USER" ping >/dev/null 2>&1
+    "$MYSQL_DIR/bin/mysqladmin" --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" ping >/dev/null 2>&1
+}
+
+verify_azerothcore_database_socket() {
+    local auth_identity fallback_identity
+
+    # Explicit socket path: matches AzerothCore's documented
+    # ".;/path/to/socket;user;password;database" Linux format.
+    auth_identity="$("$MYSQL_DIR/bin/mysql" --no-defaults --protocol=socket --socket="$MYSQL_SOCKET" \
+        --user="$DATABASE_USER" --connect-timeout=5 --batch --skip-column-names \
+        -e 'SELECT CURRENT_USER();' 2>/dev/null || true)"
+    [[ "$auth_identity" == "$DATABASE_USER@localhost" ]] \
+        || fail "Passwordless auth_socket login failed through $MYSQL_SOCKET as OS user '$DATABASE_USER'; run Update to repair MySQL accounts"
+
+    # Current AzerothCore has an upstream bug that changes the stored socket host
+    # from "." to "localhost" after the first pool connection. The next C API
+    # connection then has no explicit unix_socket argument. MySQL documents
+    # MYSQL_UNIX_PORT as the default Unix socket for localhost, so verify that
+    # exact fallback before starting authserver.
+    fallback_identity="$(MYSQL_UNIX_PORT="$MYSQL_SOCKET" "$MYSQL_DIR/bin/mysql" --no-defaults \
+        --protocol=socket --host=localhost --user="$DATABASE_USER" --connect-timeout=5 \
+        --batch --skip-column-names -e 'SELECT CURRENT_USER();' 2>/dev/null || true)"
+    [[ "$fallback_identity" == "$DATABASE_USER@localhost" ]] \
+        || fail "AzerothCore's localhost socket fallback is not resolving through MYSQL_UNIX_PORT=$MYSQL_SOCKET"
+
+    log "MySQL passwordless auth_socket verified for OS user '$DATABASE_USER'"
+    log "AzerothCore socket fallback pinned to $MYSQL_SOCKET via MYSQL_UNIX_PORT"
 }
 
 start_mysql() {
@@ -425,7 +460,7 @@ start_mysql() {
 }
 
 create_databases() {
-    "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$DATABASE_USER" <<'SQL'
+    "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" <<'SQL'
 CREATE DATABASE IF NOT EXISTS acore_auth CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS acore_characters CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS acore_world CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -443,7 +478,7 @@ wait_for_auth_database() {
     local timeout_count=900 dead_checks=0
     log "Waiting for authserver to create/update the authentication database"
     while (( timeout_count-- > 0 )); do
-        if "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$DATABASE_USER" \
+        if "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" \
             --batch --skip-column-names -e 'SELECT id FROM acore_auth.realmlist LIMIT 1' >/dev/null 2>&1; then
             return
         fi
@@ -472,7 +507,7 @@ update_realm_record() {
     escaped_local_address="$(sql_escape "$REALM_LOCAL_ADDRESS")"
     escaped_subnet="$(sql_escape "$REALM_LOCAL_SUBNET_MASK")"
 
-    "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$DATABASE_USER" <<SQL
+    "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" <<SQL
 INSERT INTO acore_auth.realmlist
     (id, name, address, localAddress, localSubnetMask, port, icon, flag, timezone, allowedSecurityLevel, population, gamebuild)
 VALUES
@@ -496,7 +531,7 @@ port_is_open() {
 
 mysql_scalar() {
     local query="$1"
-    "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$DATABASE_USER" \
+    "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" \
         --batch --skip-column-names --connect-timeout=3 -e "$query" 2>/dev/null | head -n1
 }
 
@@ -603,7 +638,7 @@ cleanup() {
 
     if mysql_ready; then
         log "Stopping MySQL"
-        "$MYSQL_DIR/bin/mysqladmin" --protocol=socket --socket="$MYSQL_SOCKET" --user="$DATABASE_USER" shutdown >/dev/null 2>&1 || true
+        "$MYSQL_DIR/bin/mysqladmin" --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" shutdown >/dev/null 2>&1 || true
     fi
     if [[ -n "$MYSQL_PID" ]]; then
         wait "$MYSQL_PID" 2>/dev/null || true
@@ -625,6 +660,7 @@ if [[ -f "$BASE_DIR/AMP-INSTALLED-VERSION.txt" ]]; then
 fi
 
 start_mysql
+verify_azerothcore_database_socket
 create_databases
 configure_server_files
 

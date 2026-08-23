@@ -407,15 +407,47 @@ verify that the instance is using `cubecoders/ampbase:debian`, fetch the current
 
 ### AMP reports `GenericApp.DoAppStartup` / `NullReferenceException` after Update succeeds
 
-Template v5 no longer asks AMP to promote `worldserver` to the monitored process. The long-lived `azerothcore-run.sh` launcher is now the process AMP tracks while it starts MySQL, performs first-run database work, starts `authserver`, and finally launches `worldserver`. This avoids AMP timing out while waiting for a child process that does not exist yet during database bootstrap.
+Template v6 retains the v5 launcher lifecycle: AMP tracks the long-lived `azerothcore-run.sh` launcher instead of promoting `worldserver` to the monitored process. The long-lived `azerothcore-run.sh` launcher is now the process AMP tracks while it starts MySQL, performs first-run database work, starts `authserver`, and finally launches `worldserver`. This avoids AMP timing out while waiting for a child process that does not exist yet during database bootstrap.
 
-If a current v5 instance still exits during startup, inspect both the application console and:
+If a current v6 instance still exits during startup, inspect both the application console and:
 
 ```text
 logs/amp-launcher.log
 ```
 
 The launcher now records its own lifecycle/failure messages there and prints recent AzerothCore logs when a managed server exits unexpectedly. The ADS webserver `WebSocketException` / `OperationCanceledException` messages that can appear when a browser tab reconnects are separate from the game-server process and are not, by themselves, evidence that AzerothCore failed.
+
+
+### Internal MySQL transport and `/tmp/mysql.sock`
+
+Template v6 uses a **Unix domain socket only** for the instance-local MySQL server. TCP networking is disabled with `--skip-networking`; there is no MySQL application port to expose or forward.
+
+AzerothCore's documented Linux database format is:
+
+```text
+.;/path/to/unix_socket;username;password;database
+```
+
+The template writes the instance-private socket path to `LoginDatabaseInfo`, `WorldDatabaseInfo`, `CharacterDatabaseInfo`, and (for Playerbots) `PlayerbotsDatabaseInfo`. The username is the AMP container's operating-system user (normally `amp`) and the password field is intentionally empty.
+
+MySQL loads its [`auth_socket`](https://dev.mysql.com/doc/refman/8.4/en/socket-pluggable-authentication.html) plugin and creates the matching `'<os-user>'@'localhost'` account with socket peer-credential authentication. `auth_socket` checks the Linux peer credentials (`SO_PEERCRED`) of the process connected to the Unix socket, so no database password is stored or sent.
+
+There is a current upstream AzerothCore bug in private-socket handling: the first pool connection correctly handles host `.` and the configured socket, but `MySQLConnection::Open()` changes the stored host to `localhost`. Later connections can therefore fall back to the MySQL client's default Unix socket instead of the configured private path. See [AzerothCore issue #23528 — Could not connect to database with socket on Linux](https://github.com/azerothcore/azerothcore-wotlk/issues/23528).
+
+Rather than patching AzerothCore source, the template exports:
+
+```text
+MYSQL_UNIX_PORT=<instance>/run/mysqld/mysqld.sock
+```
+
+MySQL documents [`MYSQL_UNIX_PORT`](https://dev.mysql.com/doc/refman/8.4/en/environment-variables.html) as the default Unix socket used for `localhost` connections. This means both AzerothCore's first explicit socket connection and its later buggy `localhost` fallback resolve to the same instance-private socket.
+
+Before starting `authserver`, the launcher verifies both paths with passwordless `auth_socket` authentication:
+
+1. an explicit connection to the configured socket;
+2. a `localhost` socket connection with no explicit socket argument, relying on `MYSQL_UNIX_PORT`.
+
+If either check fails, startup stops immediately with a focused error rather than allowing authserver/worldserver to enter a broken reconnect state.
 
 ### MySQL will not start
 

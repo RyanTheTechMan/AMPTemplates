@@ -74,7 +74,7 @@ esac
 [[ "$MYSQL_BUFFER_POOL_MB" =~ ^[0-9]+$ ]] || fail "MySQL buffer pool must be an integer"
 (( MYSQL_BUFFER_POOL_MB >= 256 )) || fail "MySQL buffer pool must be at least 256 MB"
 
-required_commands=(git cmake ninja clang clang++ ccache curl jq unzip tar xz sed awk grep find nproc ps sha256sum nm ldd readlink)
+required_commands=(git cmake ninja clang clang++ ccache curl jq unzip tar xz sed awk grep find nproc ps sha256sum nm ldd readlink openssl)
 for command_name in "${required_commands[@]}"; do
     command -v "$command_name" >/dev/null 2>&1 || fail "Required command '$command_name' is missing from the AMP container"
 done
@@ -90,6 +90,14 @@ MYSQL_LOG_DIR="$BASE_DIR/logs/mysql"
 MYSQL_SOCKET="$MYSQL_RUN_DIR/mysqld.sock"
 MYSQL_PID_FILE="$MYSQL_RUN_DIR/mysqld.pid"
 MYSQL_COMPAT_DIR="$MYSQL_DIR/compat"
+LEGACY_MYSQL_PASSWORD_FILE="$STATE_DIR/mysql-runtime-password"
+
+# AzerothCore documents "." as the Unix-socket host marker. Current AzerothCore
+# releases have an upstream bug where the first successful socket connection
+# mutates that marker to "localhost", causing later pool connections to fall back
+# to the MySQL client's default socket. MYSQL_UNIX_PORT pins that fallback to this
+# instance-private socket without patching AzerothCore source.
+export MYSQL_UNIX_PORT="$MYSQL_SOCKET"
 
 # Oracle's generic MySQL binaries require the historical libaio.so.1 SONAME.
 # Debian 13 renamed the system library to libaio.so.1t64. This template is
@@ -99,6 +107,7 @@ export LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:
 
 mkdir -p "$STATE_DIR" "$DIST_DIR" "$MYSQL_DATA_DIR" "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" \
     "$BASE_DIR/logs" "$BASE_DIR/temp" "$BASE_DIR/ccache"
+chmod 700 "$MYSQL_DATA_DIR" "$MYSQL_RUN_DIR" 2>/dev/null || true
 
 ensure_servers_are_stopped() {
     local process_pid process_command
@@ -423,6 +432,34 @@ CREATE DATABASE IF NOT EXISTS acore_characters CHARACTER SET utf8mb4 COLLATE utf
 CREATE DATABASE IF NOT EXISTS acore_world CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS acore_playerbots CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 SQL
+
+    # Remove the short-lived v6 TCP-account experiment if this is an upgraded test
+    # instance. Socket peer credentials are now the only AzerothCore DB auth path.
+    "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" \
+        -e "DROP USER IF EXISTS 'acore_amp'@'127.0.0.1'; FLUSH PRIVILEGES;" >/dev/null 2>&1 || true
+    rm -f "$LEGACY_MYSQL_PASSWORD_FILE"
+
+    local auth_socket_status
+    auth_socket_status="$("$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" \
+        --batch --skip-column-names \
+        -e "SELECT PLUGIN_STATUS FROM INFORMATION_SCHEMA.PLUGINS WHERE PLUGIN_NAME='auth_socket';" 2>/dev/null | head -n1)"
+    [[ "$auth_socket_status" == "ACTIVE" ]] \
+        || fail "MySQL auth_socket is not active; the bundled server cannot provide passwordless Unix-socket authentication"
+
+    # Verify both paths used by AzerothCore's current socket implementation:
+    # 1) the documented explicit socket, and 2) the localhost fallback triggered
+    # after its connection-info mutation bug. MYSQL_UNIX_PORT must route both to
+    # this same private socket.
+    "$MYSQL_DIR/bin/mysql" --no-defaults --protocol=socket --socket="$MYSQL_SOCKET" \
+        --user="$database_user" --connect-timeout=5 -e 'SELECT 1' >/dev/null 2>&1 \
+        || fail "Passwordless auth_socket login failed through the explicit instance socket"
+
+    MYSQL_UNIX_PORT="$MYSQL_SOCKET" "$MYSQL_DIR/bin/mysql" --no-defaults --protocol=socket \
+        --host=localhost --user="$database_user" --connect-timeout=5 -e 'SELECT 1' >/dev/null 2>&1 \
+        || fail "MySQL localhost socket fallback does not resolve through MYSQL_UNIX_PORT=$MYSQL_SOCKET"
+
+    log "Verified passwordless MySQL auth_socket access for OS user '$database_user'"
+    log "Pinned AzerothCore localhost socket fallback to $MYSQL_SOCKET via MYSQL_UNIX_PORT"
 }
 
 read_state_value() {
