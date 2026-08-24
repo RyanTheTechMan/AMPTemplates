@@ -148,7 +148,7 @@ MYSQL_RUN_DIR="$BASE_DIR/run/mysqld"
 MYSQL_LOG_DIR="$BASE_DIR/logs/mysql"
 MYSQL_SOCKET="$MYSQL_RUN_DIR/mysqld.sock"
 MYSQL_PID_FILE="$MYSQL_RUN_DIR/mysqld.pid"
-STATE_DIR="$BASE_DIR/.amp-state"
+STATE_DIR="$BASE_DIR/state"
 OPENSSL_CONF_FILE="$STATE_DIR/openssl-azerothcore.cnf"
 READY_MARKER="$BASE_DIR/run/worldserver.ready"
 READY_STABILITY_SECONDS=10
@@ -176,7 +176,7 @@ mkdir -p "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" "$BASE_DIR/logs" "$BASE_DIR/temp" "$B
 chmod 700 "$MYSQL_RUN_DIR" 2>/dev/null || true
 LAUNCHER_LOG="$BASE_DIR/logs/amp-launcher.log"
 touch "$LAUNCHER_LOG" 2>/dev/null || true
-log "Launcher v8 starting as user $MYSQL_ADMIN_USER (PID $$)"
+log "Launcher v9 starting as user $MYSQL_ADMIN_USER (PID $$)"
 
 [[ -x "$BIN_DIR/authserver" ]] || fail "authserver is not installed; run Update first"
 [[ -x "$BIN_DIR/worldserver" ]] || fail "worldserver is not installed; run Update first"
@@ -232,8 +232,20 @@ verify_runtime_mysql_linkage() {
 verify_runtime_mysql_linkage
 
 prepare_openssl_runtime() {
-    local provider_output cipher_output
+    local provider_output cipher_output module_dir legacy_module
     command -v openssl >/dev/null 2>&1 || fail "OpenSSL CLI is missing from the container"
+
+    module_dir="$(openssl version -m 2>/dev/null | sed -n 's/^MODULESDIR: "\(.*\)"$/\1/p')"
+    [[ -n "$module_dir" ]] || fail "Could not determine the OpenSSL provider module directory"
+    legacy_module="$module_dir/legacy.so"
+    [[ -r "$legacy_module" ]] \
+        || fail "OpenSSL legacy provider module is missing at $legacy_module. Debian 13 requires the separate openssl-provider-legacy package; refresh/recreate the AMP container with the v9 template package list."
+
+    # Explicitly pin provider discovery to Debian's active OpenSSL module directory.
+    # This avoids provider lookup ambiguity when the bundled MySQL libraries are also
+    # present in LD_LIBRARY_PATH.
+    export OPENSSL_MODULES="$module_dir"
+    log "OpenSSL provider modules: $OPENSSL_MODULES (legacy.so present)"
 
     cat > "$OPENSSL_CONF_FILE" <<'EOF'
 # AzerothCore 3.3.5a still uses RC4 for the WoW protocol. Under OpenSSL 3,
@@ -257,14 +269,14 @@ activate = 1
 EOF
     chmod 600 "$OPENSSL_CONF_FILE" 2>/dev/null || true
 
-    provider_output="$(OPENSSL_CONF="$OPENSSL_CONF_FILE" openssl list -providers 2>&1)" \
+    provider_output="$(OPENSSL_CONF="$OPENSSL_CONF_FILE" OPENSSL_MODULES="$OPENSSL_MODULES" openssl list -providers 2>&1)" \
         || fail "OpenSSL could not load the AzerothCore provider configuration"
     grep -Eq '^[[:space:]]+default[[:space:]]*$' <<< "$provider_output" \
         || fail "OpenSSL default provider did not activate"
     grep -Eq '^[[:space:]]+legacy[[:space:]]*$' <<< "$provider_output" \
         || fail "OpenSSL legacy provider did not activate; RC4 required by WoW 3.3.5a is unavailable"
 
-    cipher_output="$(OPENSSL_CONF="$OPENSSL_CONF_FILE" openssl list -cipher-algorithms 2>&1)" \
+    cipher_output="$(OPENSSL_CONF="$OPENSSL_CONF_FILE" OPENSSL_MODULES="$OPENSSL_MODULES" openssl list -cipher-algorithms 2>&1)" \
         || fail "OpenSSL could not enumerate ciphers with the AzerothCore provider configuration"
     grep -Eq '(^|[[:space:]])RC4([[:space:]-]|$)' <<< "$cipher_output" \
         || fail "OpenSSL legacy provider loaded but RC4 was not available"
@@ -272,7 +284,7 @@ EOF
     # Exercise the same legacy cipher through EVP before starting a server. This
     # catches provider/module problems before worldserver reaches its ARC4 ASSERT.
     if ! printf 'amp-azerothcore-rc4-preflight' \
-        | OPENSSL_CONF="$OPENSSL_CONF_FILE" openssl enc -rc4 \
+        | OPENSSL_CONF="$OPENSSL_CONF_FILE" OPENSSL_MODULES="$OPENSSL_MODULES" openssl enc -rc4 \
             -K 00112233445566778899aabbccddeeff -nosalt >/dev/null 2>&1; then
         fail "OpenSSL RC4 preflight failed; AzerothCore would crash during ARC4 initialization"
     fi

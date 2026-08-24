@@ -79,6 +79,15 @@ for command_name in "${required_commands[@]}"; do
     command -v "$command_name" >/dev/null 2>&1 || fail "Required command '$command_name' is missing from the AMP container"
 done
 
+# Debian 13 splits OpenSSL's legacy algorithms into a separate provider package.
+# AzerothCore 3.3.5a needs RC4, so fail before downloads/compilation if the AMP
+# container was not refreshed with openssl-provider-legacy from the v9 template.
+OPENSSL_MODULE_DIR="$(openssl version -m 2>/dev/null | sed -n 's/^MODULESDIR: "\(.*\)"$/\1/p')"
+[[ -n "$OPENSSL_MODULE_DIR" ]] || fail "Could not determine the OpenSSL provider module directory"
+[[ -r "$OPENSSL_MODULE_DIR/legacy.so" ]] \
+    || fail "OpenSSL legacy provider is missing at $OPENSSL_MODULE_DIR/legacy.so. Debian 13 requires openssl-provider-legacy; refresh/recreate the AMP container using template v9 before Update."
+log "OpenSSL legacy provider dependency verified: $OPENSSL_MODULE_DIR/legacy.so"
+
 SOURCE_DIR="$BASE_DIR/source"
 BUILD_DIR="$BASE_DIR/build"
 DIST_DIR="$BASE_DIR/dist"
@@ -799,3 +808,6 @@ install_client_data
 log "Installation/update complete"
 log "Installed version details:"
 sed 's/^/[AMP\/AzerothCore installer]   /' "$BASE_DIR/AMP-INSTALLED-VERSION.txt"
+log "============================================================"
+log "INSTALL/UPDATE COMPLETE - AzerothCore is ready to start"
+log "============================================================"

@@ -407,9 +407,11 @@ verify that the instance is using `cubecoders/ampbase:debian`, fetch the current
 
 ### AMP reports `GenericApp.DoAppStartup` / `NullReferenceException` after Update succeeds
 
-Template v8 uses the long-lived launcher lifecycle: AMP tracks the long-lived `azerothcore-run.sh` launcher instead of promoting `worldserver` to the monitored process. The long-lived `azerothcore-run.sh` launcher is now the process AMP tracks while it starts MySQL, performs first-run database work, starts `authserver`, and finally launches `worldserver`. This avoids AMP timing out while waiting for a child process that does not exist yet during database bootstrap.
+Debian 13 packages the OpenSSL legacy provider separately as `openssl-provider-legacy`. The AMP template installs that package because WoW 3.3.5a uses RC4; startup verifies `legacy.so` and refuses to launch if the container has not been refreshed with the required provider.
 
-If a current v8 instance still exits during startup, inspect both the application console and:
+Template v9 uses the long-lived launcher lifecycle: AMP tracks the long-lived `azerothcore-run.sh` launcher instead of promoting `worldserver` to the monitored process. The long-lived `azerothcore-run.sh` launcher is now the process AMP tracks while it starts MySQL, performs first-run database work, starts `authserver`, and finally launches `worldserver`. This avoids AMP timing out while waiting for a child process that does not exist yet during database bootstrap.
+
+If a current v9 instance still exits during startup, inspect both the application console and:
 
 ```text
 logs/amp-launcher.log
@@ -420,7 +422,7 @@ The launcher now records its own lifecycle/failure messages there and prints rec
 
 ### Internal MySQL transport and `/tmp/mysql.sock`
 
-Template v8 uses a **Unix domain socket only** for the instance-local MySQL server. TCP networking is disabled with `--skip-networking`; there is no MySQL application port to expose or forward.
+Template v9 uses a **Unix domain socket only** for the instance-local MySQL server. TCP networking is disabled with `--skip-networking`; there is no MySQL application port to expose or forward.
 
 AzerothCore's documented Linux database format is:
 
