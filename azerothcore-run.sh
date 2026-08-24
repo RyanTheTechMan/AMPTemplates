@@ -157,7 +157,6 @@ METRICS_INTERVAL_SECONDS="$(numeric_or_default "${AMP_ACORE_METRICS_INTERVAL_SEC
 if (( METRICS_INTERVAL_SECONDS < 10 )); then
     METRICS_INTERVAL_SECONDS=10
 fi
-SERVER_START_EPOCH="$(date +%s)"
 AUTH_PORT="$(numeric_or_default "${AMP_ACORE_AUTH_PORT:-3724}" 3724)"
 WORLD_PORT="$(numeric_or_default "${AMP_ACORE_WORLD_PORT:-8085}" 8085)"
 REALM_NAME="${AMP_ACORE_REALM_NAME:-AzerothCore - AMP}"
@@ -177,7 +176,7 @@ mkdir -p "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" "$BASE_DIR/logs" "$BASE_DIR/temp" "$B
 chmod 700 "$MYSQL_RUN_DIR" 2>/dev/null || true
 LAUNCHER_LOG="$BASE_DIR/logs/amp-launcher.log"
 touch "$LAUNCHER_LOG" 2>/dev/null || true
-log "Launcher v6 starting as user $MYSQL_ADMIN_USER (PID $$)"
+log "Launcher v8 starting as user $MYSQL_ADMIN_USER (PID $$)"
 
 [[ -x "$BIN_DIR/authserver" ]] || fail "authserver is not installed; run Update first"
 [[ -x "$BIN_DIR/worldserver" ]] || fail "worldserver is not installed; run Update first"
@@ -648,28 +647,48 @@ emit_server_info() {
         "$(sanitize_info_value "$mysql_version")"
 }
 
+installed_distribution() {
+    local distribution
+    distribution="$(cat "$STATE_DIR/distribution" 2>/dev/null || true)"
+    [[ -n "$distribution" ]] || distribution="$(installed_report_value 'Distribution')"
+    printf '%s' "$distribution"
+}
+
+is_playerbots_distribution() {
+    local distribution
+    distribution="$(installed_distribution)"
+    [[ "$distribution" == playerbots-* ]]
+}
+
 emit_metrics() {
-    local human_sessions online_characters automated_characters accounts_total characters_total uptime_minutes now
+    # AMP already tracks real players through Console.UserJoinRegex/UserLeaveRegex
+    # as its native "Active Users" metric. Only publish one custom metric for
+    # Playerbots builds: the number of socketless bot characters currently online.
+    local human_sessions online_characters bots_online
+    is_playerbots_distribution || return 0
+
     human_sessions="$(mysql_scalar 'SELECT COUNT(*) FROM acore_auth.account WHERE online <> 0;' || true)"
     online_characters="$(mysql_scalar 'SELECT COUNT(*) FROM acore_characters.characters WHERE online <> 0;' || true)"
-    accounts_total="$(mysql_scalar 'SELECT COUNT(*) FROM acore_auth.account;' || true)"
-    characters_total="$(mysql_scalar 'SELECT COUNT(*) FROM acore_characters.characters;' || true)"
     [[ "$human_sessions" =~ ^[0-9]+$ ]] || return 0
     [[ "$online_characters" =~ ^[0-9]+$ ]] || return 0
-    [[ "$accounts_total" =~ ^[0-9]+$ ]] || return 0
-    [[ "$characters_total" =~ ^[0-9]+$ ]] || return 0
+
     if (( online_characters > human_sessions )); then
-        automated_characters=$((online_characters - human_sessions))
+        bots_online=$((online_characters - human_sessions))
     else
-        automated_characters=0
+        bots_online=0
     fi
-    now="$(date +%s)"
-    uptime_minutes=$(((now - SERVER_START_EPOCH) / 60))
-    printf 'AMP_AZEROTHCORE_METRICS HumanSessions=%s AutomatedCharacters=%s OnlineCharacters=%s AccountsTotal=%s CharactersTotal=%s UptimeMinutes=%s\n' \
-        "$human_sessions" "$automated_characters" "$online_characters" "$accounts_total" "$characters_total" "$uptime_minutes"
+
+    printf 'AMP_AZEROTHCORE_METRICS BotsOnline=%s\n' "$bots_online"
 }
 
 start_metrics_monitor() {
+    # Standard AzerothCore intentionally publishes no custom metrics. AMP's
+    # built-in Active Users list/count remains the single human-player metric.
+    if ! is_playerbots_distribution; then
+        log "Custom Bots Online metric disabled for non-Playerbots distribution"
+        return 0
+    fi
+
     (
         while process_is_running "$WORLD_PID" && [[ ! -f "$READY_MARKER" ]]; do
             sleep 1

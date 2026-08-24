@@ -433,7 +433,7 @@ CREATE DATABASE IF NOT EXISTS acore_world CHARACTER SET utf8mb4 COLLATE utf8mb4_
 CREATE DATABASE IF NOT EXISTS acore_playerbots CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 SQL
 
-    # Remove the short-lived v6 TCP-account experiment if this is an upgraded test
+    # Remove the short-lived earlier TCP-account experiment if this is an upgraded test
     # instance. Socket peer credentials are now the only AzerothCore DB auth path.
     "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" \
         -e "DROP USER IF EXISTS 'acore_amp'@'127.0.0.1'; FLUSH PRIVILEGES;" >/dev/null 2>&1 || true

@@ -22,8 +22,8 @@ Meta.Prerequisites=[]
 Meta.ExtraContainerPackages=["build-essential","binutils","ccache","libtool","cmake-data","ninja-build","cmake","clang","git","curl","wget","jq","unzip","xz-utils","ca-certificates","procps","lsb-release","pkg-config","openssl","file","gawk","util-linux","tzdata","libaio1t64","libncurses6","libnuma1","libboost-all-dev","libssl-dev","libreadline-dev","zlib1g-dev","libbz2-dev","libncurses-dev","liblzma-dev","google-perftools","libgoogle-perftools-dev"]
 Meta.ConfigReleaseState=NotSpecified
 Meta.NoCommercialUsage=False
-Meta.ConfigVersion=7
-Meta.ReleaseNotes=Runtime hardening after full Playerbots first-boot validation: enables the OpenSSL default and legacy providers for WoW 3.3.5a RC4, preflights RC4 before AzerothCore starts, keeps the passwordless private MySQL Unix socket workaround, normalizes integer-valued AMP checkbox settings, disables unsupported high process priority in containers, delays metrics until worldserver is stable, and only marks AMP ready after the world port remains healthy for a grace period. Retains Debian 13, bundled MySQL 8.4 linkage, Playerbots, player tracking, moderation, metrics, versions and modules.
+Meta.ConfigVersion=8
+Meta.ReleaseNotes=v8 dashboard cleanup and runtime identification: AMP native Active Users remains the human-player metric; Playerbots distributions publish only a Bots Online custom metric, while standard AzerothCore publishes no custom metric. Launcher/runtime version markers now consistently report v8. Retains Debian 13, passwordless private MySQL Unix sockets, OpenSSL legacy-provider RC4 support, stable readiness checks, Playerbots, player tracking, moderation, versions and modules.
 Meta.BreakingReleaseNotes=
 Meta.AppConfigId=5fcd02aa-1117-4d8e-9a48-25c2f112bbd9
 Meta.OriginalSource=RyanTheTechMan-AMPTemplates
@@ -50,7 +50,7 @@ App.CommandLineParameterDelimiter=
 App.ExitMethod=String
 App.ExitMethodWindows=None
 App.ExitTimeout=180
-App.ExitString=server shutdown 0
+App.ExitString=server shutdown 1
 App.ExitFile=app_exit.lck
 App.RestartDelaySeconds=5
 App.HasWriteableConsole=True
@@ -115,7 +115,7 @@ Console.UserChatRegex=^(?:Leader player|Player) (?<username>\S+) (?:(?:says|emot
 Console.UpdateAvailableRegex=^$
 Console.PreConnectRegex=
 Console.ConnectIPRegex=
-Console.MetricsRegex=^AMP_AZEROTHCORE_METRICS HumanSessions=(?<Human_Sessions>\d+) AutomatedCharacters=(?<Automated_Characters>\d+) OnlineCharacters=(?<Online_Characters>\d+) AccountsTotal=(?<Accounts_Total>\d+) CharactersTotal=(?<Characters_Total>\d+) UptimeMinutes=(?<Uptime_Minutes>\d+)$
+Console.MetricsRegex=^AMP_AZEROTHCORE_METRICS BotsOnline=(?<Bots_Online>\d+)$
 Console.ServerInfoRegex=^AMP_AZEROTHCORE_INFO Distribution=(?<Distribution>\S+) CoreRef=(?<Core_Ref>\S+) CoreCommit=(?<Core_Commit>\S+) Modules=(?<Modules>\d+) ClientData=(?<Client_Data>\S+) MySQL=(?<MySQL>\S+)$
 Console.ServerAuthURLPromptRegex=
 Console.ServerAuthAckRegex=

@@ -407,9 +407,9 @@ verify that the instance is using `cubecoders/ampbase:debian`, fetch the current
 
 ### AMP reports `GenericApp.DoAppStartup` / `NullReferenceException` after Update succeeds
 
-Template v6 retains the v5 launcher lifecycle: AMP tracks the long-lived `azerothcore-run.sh` launcher instead of promoting `worldserver` to the monitored process. The long-lived `azerothcore-run.sh` launcher is now the process AMP tracks while it starts MySQL, performs first-run database work, starts `authserver`, and finally launches `worldserver`. This avoids AMP timing out while waiting for a child process that does not exist yet during database bootstrap.
+Template v8 uses the long-lived launcher lifecycle: AMP tracks the long-lived `azerothcore-run.sh` launcher instead of promoting `worldserver` to the monitored process. The long-lived `azerothcore-run.sh` launcher is now the process AMP tracks while it starts MySQL, performs first-run database work, starts `authserver`, and finally launches `worldserver`. This avoids AMP timing out while waiting for a child process that does not exist yet during database bootstrap.
 
-If a current v6 instance still exits during startup, inspect both the application console and:
+If a current v8 instance still exits during startup, inspect both the application console and:
 
 ```text
 logs/amp-launcher.log
@@ -420,7 +420,7 @@ The launcher now records its own lifecycle/failure messages there and prints rec
 
 ### Internal MySQL transport and `/tmp/mysql.sock`
 
-Template v6 uses a **Unix domain socket only** for the instance-local MySQL server. TCP networking is disabled with `--skip-networking`; there is no MySQL application port to expose or forward.
+Template v8 uses a **Unix domain socket only** for the instance-local MySQL server. TCP networking is disabled with `--skip-networking`; there is no MySQL application port to expose or forward.
 
 AzerothCore's documented Linux database format is:
 
@@ -567,4 +567,10 @@ If startup reports an OpenSSL provider or RC4 preflight failure, do not disable 
 ## First boot and port status
 
 A new instance can spend several minutes importing the Character, World, and Playerbots databases. During that import it is normal for AMP to show the Authentication port listening while the World port is still not listening. The template now waits until the configured World port is open **and remains healthy for 10 seconds** before emitting `AMP_AZEROTHCORE_READY`; AMP metrics also remain quiet until that point so they do not splice into first-boot SQL output.
+
+### AMP player/status metrics
+
+AMP's native **Active Users** count/list is driven by AzerothCore's real-player login and logout messages. Playerbot sessions are socketless and are deliberately excluded from those join/leave matches, so Active Users represents human players.
+
+For Playerbots distributions only, the launcher publishes one additional custom metric: **Bots Online**. It is calculated from online character sessions minus real socket-backed account sessions, which covers randombots, addclass bots, and player altbots without depending on a particular bot-account prefix. Standard AzerothCore distributions do not emit this custom metric, so their dashboard shows only AMP's native Active Users metric.
 
