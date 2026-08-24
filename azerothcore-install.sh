@@ -74,19 +74,25 @@ esac
 [[ "$MYSQL_BUFFER_POOL_MB" =~ ^[0-9]+$ ]] || fail "MySQL buffer pool must be an integer"
 (( MYSQL_BUFFER_POOL_MB >= 256 )) || fail "MySQL buffer pool must be at least 256 MB"
 
-required_commands=(git cmake ninja clang clang++ ccache curl jq unzip tar xz sed awk grep find nproc ps sha256sum nm ldd readlink openssl)
+required_commands=(git cmake ninja clang clang++ ccache curl jq unzip tar xz sed awk grep find nproc ps sha256sum nm ldd readlink openssl dpkg-query dirname)
 for command_name in "${required_commands[@]}"; do
     command -v "$command_name" >/dev/null 2>&1 || fail "Required command '$command_name' is missing from the AMP container"
 done
 
 # Debian 13 splits OpenSSL's legacy algorithms into a separate provider package.
-# AzerothCore 3.3.5a needs RC4, so fail before downloads/compilation if the AMP
-# container was not refreshed with openssl-provider-legacy from the v9 template.
-OPENSSL_MODULE_DIR="$(openssl version -m 2>/dev/null | sed -n 's/^MODULESDIR: "\(.*\)"$/\1/p')"
-[[ -n "$OPENSSL_MODULE_DIR" ]] || fail "Could not determine the OpenSSL provider module directory"
-[[ -r "$OPENSSL_MODULE_DIR/legacy.so" ]] \
-    || fail "OpenSSL legacy provider is missing at $OPENSSL_MODULE_DIR/legacy.so. Debian 13 requires openssl-provider-legacy; refresh/recreate the AMP container using template v9 before Update."
-log "OpenSSL legacy provider dependency verified: $OPENSSL_MODULE_DIR/legacy.so"
+# Locate the module from Debian's package database rather than from `openssl` on
+# PATH: after MySQL is installed its portable bin directory may contain Oracle's
+# own OpenSSL executable with a non-Debian MODULESDIR.
+SYSTEM_OPENSSL="/usr/bin/openssl"
+[[ -x "$SYSTEM_OPENSSL" ]] || fail "Debian system OpenSSL is missing at $SYSTEM_OPENSSL"
+OPENSSL_LEGACY_MODULE="$(dpkg-query -L openssl-provider-legacy 2>/dev/null | awk '/\/legacy\.so$/ {print; exit}')"
+if [[ -z "$OPENSSL_LEGACY_MODULE" ]]; then
+    OPENSSL_LEGACY_MODULE="$(find /usr/lib /lib -type f -path '*/ossl-modules/legacy.so' -print -quit 2>/dev/null || true)"
+fi
+[[ -n "$OPENSSL_LEGACY_MODULE" && -r "$OPENSSL_LEGACY_MODULE" ]] \
+    || fail "Debian OpenSSL legacy provider is missing. Refresh/recreate the AMP container so openssl-provider-legacy is installed."
+OPENSSL_MODULE_DIR="$(dirname "$OPENSSL_LEGACY_MODULE")"
+log "OpenSSL legacy provider dependency verified: $OPENSSL_LEGACY_MODULE"
 
 SOURCE_DIR="$BASE_DIR/source"
 BUILD_DIR="$BASE_DIR/build"
@@ -99,6 +105,7 @@ MYSQL_LOG_DIR="$BASE_DIR/logs/mysql"
 MYSQL_SOCKET="$MYSQL_RUN_DIR/mysqld.sock"
 MYSQL_PID_FILE="$MYSQL_RUN_DIR/mysqld.pid"
 MYSQL_COMPAT_DIR="$MYSQL_DIR/compat"
+MYSQL_CLIENT_RUNTIME_DIR="$BASE_DIR/runtime/mysql-client"
 LEGACY_MYSQL_PASSWORD_FILE="$STATE_DIR/mysql-runtime-password"
 
 # AzerothCore documents "." as the Unix-socket host marker. Current AzerothCore
@@ -112,7 +119,8 @@ export MYSQL_UNIX_PORT="$MYSQL_SOCKET"
 # Debian 13 renamed the system library to libaio.so.1t64. This template is
 # x86_64-only, where time_t was already 64-bit, so a local compatibility name
 # can safely point at Debian 13's system library without modifying the container.
-export LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}"
+MYSQL_LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private"
+ACORE_LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_CLIENT_RUNTIME_DIR"
 
 mkdir -p "$STATE_DIR" "$DIST_DIR" "$MYSQL_DATA_DIR" "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" \
     "$BASE_DIR/logs" "$BASE_DIR/temp" "$BASE_DIR/ccache"
@@ -398,6 +406,20 @@ start_temporary_mysql() {
     fail "Timed out waiting for MySQL to start"
 }
 
+prepare_mysql_client_runtime() {
+    local source_library target_name count=0
+    mkdir -p "$MYSQL_CLIENT_RUNTIME_DIR"
+    rm -f "$MYSQL_CLIENT_RUNTIME_DIR"/libmysqlclient.so* 2>/dev/null || true
+    for source_library in "$MYSQL_DIR"/lib/libmysqlclient.so*; do
+        [[ -e "$source_library" ]] || continue
+        target_name="$(basename "$source_library")"
+        ln -sfn "$(readlink -f "$source_library")" "$MYSQL_CLIENT_RUNTIME_DIR/$target_name"
+        count=$((count + 1))
+    done
+    (( count > 0 )) || fail "Bundled MySQL client libraries are missing after installation"
+    log "Prepared isolated AzerothCore MySQL client runtime: $MYSQL_CLIENT_RUNTIME_DIR"
+}
+
 initialize_mysql_data() {
     if [[ ! -f "$MYSQL_DATA_DIR/mysql.ibd" ]]; then
         log "Initializing the instance-local MySQL data directory"
@@ -619,7 +641,7 @@ build_azerothcore() {
 
     export MYSQL_HOME="$MYSQL_DIR"
     export PATH="$MYSQL_DIR/bin:$PATH"
-    export LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}"
+    export LD_LIBRARY_PATH="$MYSQL_LD_LIBRARY_PATH"
     export CCACHE_DIR="$BASE_DIR/ccache"
     export CCACHE_MAXSIZE="3G"
 
@@ -671,17 +693,23 @@ build_azerothcore() {
     [[ -x "$DIST_DIR/bin/authserver" ]] || fail "Build completed without dist/bin/authserver"
     [[ -x "$DIST_DIR/bin/worldserver" ]] || fail "Build completed without dist/bin/worldserver"
 
-    local server_binary linked_mysql unresolved_runtime
+    local server_binary linked_mysql unresolved_runtime linked_crypto linked_ssl
     for server_binary in "$DIST_DIR/bin/authserver" "$DIST_DIR/bin/worldserver"; do
-        unresolved_runtime="$(LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}" ldd "$server_binary" 2>/dev/null | grep 'not found' || true)"
+        unresolved_runtime="$(env LD_LIBRARY_PATH="$ACORE_LD_LIBRARY_PATH" ldd "$server_binary" 2>/dev/null | grep 'not found' || true)"
         [[ -z "$unresolved_runtime" ]] \
             || fail "$(basename "$server_binary") has unresolved runtime libraries: $unresolved_runtime"
-        linked_mysql="$(LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}" ldd "$server_binary" 2>/dev/null \
+        linked_mysql="$(env LD_LIBRARY_PATH="$ACORE_LD_LIBRARY_PATH" ldd "$server_binary" 2>/dev/null \
             | awk '/libmysqlclient\.so/{print $3; exit}')"
-        [[ -n "$linked_mysql" && "$linked_mysql" == "$MYSQL_DIR/lib/"* ]] \
-            || fail "$(basename "$server_binary") is not resolving libmysqlclient from the bundled MySQL installation (resolved '${linked_mysql:-none}')"
+        [[ -n "$linked_mysql" && "$linked_mysql" == "$MYSQL_CLIENT_RUNTIME_DIR/"* ]] \
+            || fail "$(basename "$server_binary") is not resolving libmysqlclient from the isolated bundled MySQL runtime (resolved '${linked_mysql:-none}')"
+        linked_crypto="$(env LD_LIBRARY_PATH="$ACORE_LD_LIBRARY_PATH" ldd "$server_binary" 2>/dev/null | awk '/libcrypto\.so/{print $3; exit}')"
+        linked_ssl="$(env LD_LIBRARY_PATH="$ACORE_LD_LIBRARY_PATH" ldd "$server_binary" 2>/dev/null | awk '/libssl\.so/{print $3; exit}')"
+        [[ -n "$linked_crypto" && "$linked_crypto" != "$MYSQL_DIR/"* ]] \
+            || fail "$(basename "$server_binary") is resolving libcrypto from the bundled MySQL tree ('${linked_crypto:-none}')"
+        [[ -z "$linked_ssl" || "$linked_ssl" != "$MYSQL_DIR/"* ]] \
+            || fail "$(basename "$server_binary") is resolving libssl from the bundled MySQL tree ('$linked_ssl')"
     done
-    log "Installed server binaries verified against bundled MySQL client library"
+    log "Installed server binaries verified: bundled MySQL client + Debian OpenSSL runtime"
 
     mkdir -p "$DIST_DIR/etc" "$DIST_DIR/etc/modules" "$DIST_DIR/bin" "$BASE_DIR/logs"
     local config_dist config_live
@@ -786,6 +814,7 @@ install_client_data() {
 
 install_mysql
 ensure_mysql_libaio_compat
+prepare_mysql_client_runtime
 initialize_mysql_data
 stop_temporary_mysql
 MYSQL_STARTED_HERE="false"
@@ -794,6 +823,7 @@ prepare_core_repository
 prepare_modules
 verify_portable_mysql_toolchain
 build_azerothcore
+unset LD_LIBRARY_PATH || true
 install_client_data
 
 # Keep the human-readable report useful to both users and the launcher even if
@@ -805,9 +835,11 @@ install_client_data
     [[ -n "$client_report_version" ]] && printf 'Client data: %s\n' "$client_report_version"
 } >> "$BASE_DIR/AMP-INSTALLED-VERSION.txt"
 
-log "Installation/update complete"
+log "============================================================"
+log "SUCCESS - INSTALL/UPDATE FINISHED"
+log "============================================================"
 log "Installed version details:"
 sed 's/^/[AMP\/AzerothCore installer]   /' "$BASE_DIR/AMP-INSTALLED-VERSION.txt"
 log "============================================================"
-log "INSTALL/UPDATE COMPLETE - AzerothCore is ready to start"
+log "SUCCESS - INSTALL/UPDATE COMPLETE - AzerothCore is ready to start"
 log "============================================================"

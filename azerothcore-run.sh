@@ -143,6 +143,7 @@ BIN_DIR="$DIST_DIR/bin"
 ETC_DIR="$DIST_DIR/etc"
 MYSQL_DIR="$BASE_DIR/mysql"
 MYSQL_COMPAT_DIR="$MYSQL_DIR/compat"
+MYSQL_CLIENT_RUNTIME_DIR="$BASE_DIR/runtime/mysql-client"
 MYSQL_DATA_DIR="$BASE_DIR/mysql-data"
 MYSQL_RUN_DIR="$BASE_DIR/run/mysqld"
 MYSQL_LOG_DIR="$BASE_DIR/logs/mysql"
@@ -176,7 +177,7 @@ mkdir -p "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" "$BASE_DIR/logs" "$BASE_DIR/temp" "$B
 chmod 700 "$MYSQL_RUN_DIR" 2>/dev/null || true
 LAUNCHER_LOG="$BASE_DIR/logs/amp-launcher.log"
 touch "$LAUNCHER_LOG" 2>/dev/null || true
-log "Launcher v9 starting as user $MYSQL_ADMIN_USER (PID $$)"
+log "Launcher v10 starting as user $MYSQL_ADMIN_USER (PID $$)"
 
 [[ -x "$BIN_DIR/authserver" ]] || fail "authserver is not installed; run Update first"
 [[ -x "$BIN_DIR/worldserver" ]] || fail "worldserver is not installed; run Update first"
@@ -187,8 +188,33 @@ log "Launcher v9 starting as user $MYSQL_ADMIN_USER (PID $$)"
 [[ -d "$BIN_DIR/dbc" && -d "$BIN_DIR/maps" && -d "$BIN_DIR/vmaps" && -d "$BIN_DIR/mmaps" ]] \
     || fail "Required client data is missing from dist/bin; enable client-data installation or provide extracted data"
 
-export PATH="$MYSQL_DIR/bin:$PATH"
-export LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private:${LD_LIBRARY_PATH:-}"
+# Keep Oracle MySQL's private libraries isolated from AzerothCore.  The MySQL
+# tarball also ships its own OpenSSL tooling/libraries; allowing those to leak
+# into worldserver caused provider discovery to target /usr/local/mysql.
+MYSQL_LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private"
+ACORE_LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_CLIENT_RUNTIME_DIR"
+SYSTEM_OPENSSL="/usr/bin/openssl"
+
+mysql_cli() {
+    env LD_LIBRARY_PATH="$MYSQL_LD_LIBRARY_PATH" "$MYSQL_DIR/bin/mysql" "$@"
+}
+mysqladmin_cli() {
+    env LD_LIBRARY_PATH="$MYSQL_LD_LIBRARY_PATH" "$MYSQL_DIR/bin/mysqladmin" "$@"
+}
+
+prepare_mysql_client_runtime() {
+    local source_library target_name count=0
+    mkdir -p "$MYSQL_CLIENT_RUNTIME_DIR"
+    rm -f "$MYSQL_CLIENT_RUNTIME_DIR"/libmysqlclient.so* 2>/dev/null || true
+    for source_library in "$MYSQL_DIR"/lib/libmysqlclient.so*; do
+        [[ -e "$source_library" ]] || continue
+        target_name="$(basename "$source_library")"
+        ln -sfn "$(readlink -f "$source_library")" "$MYSQL_CLIENT_RUNTIME_DIR/$target_name"
+        count=$((count + 1))
+    done
+    (( count > 0 )) || fail "Bundled MySQL client libraries are missing; run Update"
+}
+prepare_mysql_client_runtime
 # Keep the documented private-socket path in AzerothCore's DB strings. Current
 # AzerothCore mutates the "." socket marker to "localhost" after the first pool
 # connection; MYSQL_UNIX_PORT makes the resulting C-client fallback use this
@@ -216,36 +242,50 @@ export AC_SERVER_LOGIN_INFO="$(boolean_number "${AC_SERVER_LOGIN_INFO:-0}")"
 export AC_AI_PLAYERBOT_ADD_CLASS_COMMAND="$(boolean_number "${AC_AI_PLAYERBOT_ADD_CLASS_COMMAND:-1}")"
 
 verify_runtime_mysql_linkage() {
-    local server_binary linked_mysql unresolved_runtime mysql_unresolved
-    mysql_unresolved="$(ldd "$MYSQL_DIR/bin/mysqld" 2>/dev/null | grep 'not found' || true)"
+    local server_binary linked_mysql unresolved_runtime mysql_unresolved linked_crypto linked_ssl
+    mysql_unresolved="$(env LD_LIBRARY_PATH="$MYSQL_LD_LIBRARY_PATH" ldd "$MYSQL_DIR/bin/mysqld" 2>/dev/null | grep 'not found' || true)"
     [[ -z "$mysql_unresolved" ]] \
         || fail "mysqld has unresolved runtime libraries: $mysql_unresolved"
     for server_binary in "$BIN_DIR/authserver" "$BIN_DIR/worldserver"; do
-        unresolved_runtime="$(ldd "$server_binary" 2>/dev/null | grep 'not found' || true)"
+        unresolved_runtime="$(env LD_LIBRARY_PATH="$ACORE_LD_LIBRARY_PATH" ldd "$server_binary" 2>/dev/null | grep 'not found' || true)"
         [[ -z "$unresolved_runtime" ]] \
             || fail "$(basename "$server_binary") has unresolved runtime libraries: $unresolved_runtime"
-        linked_mysql="$(ldd "$server_binary" 2>/dev/null | awk '/libmysqlclient\.so/{print $3; exit}')"
-        [[ -n "$linked_mysql" && "$linked_mysql" == "$MYSQL_DIR/lib/"* ]] \
-            || fail "$(basename "$server_binary") is not using the bundled MySQL client library (resolved '${linked_mysql:-none}'). Run Update to rebuild the server."
+        linked_mysql="$(env LD_LIBRARY_PATH="$ACORE_LD_LIBRARY_PATH" ldd "$server_binary" 2>/dev/null | awk '/libmysqlclient\.so/{print $3; exit}')"
+        [[ -n "$linked_mysql" && "$linked_mysql" == "$MYSQL_CLIENT_RUNTIME_DIR/"* ]] \
+            || fail "$(basename "$server_binary") is not using the isolated bundled MySQL client library (resolved '${linked_mysql:-none}'). Run Update to rebuild the server."
+
+        # AzerothCore was compiled against Debian OpenSSL.  Refuse to start if
+        # Oracle MySQL's private OpenSSL libraries are shadowing the system copy,
+        # because Debian's legacy provider must match the libcrypto in the process.
+        linked_crypto="$(env LD_LIBRARY_PATH="$ACORE_LD_LIBRARY_PATH" ldd "$server_binary" 2>/dev/null | awk '/libcrypto\.so/{print $3; exit}')"
+        linked_ssl="$(env LD_LIBRARY_PATH="$ACORE_LD_LIBRARY_PATH" ldd "$server_binary" 2>/dev/null | awk '/libssl\.so/{print $3; exit}')"
+        [[ -n "$linked_crypto" && "$linked_crypto" != "$MYSQL_DIR/"* ]] \
+            || fail "$(basename "$server_binary") is resolving libcrypto from the bundled MySQL tree ('${linked_crypto:-none}'); refusing mixed OpenSSL runtimes"
+        [[ -z "$linked_ssl" || "$linked_ssl" != "$MYSQL_DIR/"* ]] \
+            || fail "$(basename "$server_binary") is resolving libssl from the bundled MySQL tree ('$linked_ssl'); refusing mixed OpenSSL runtimes"
     done
 }
 verify_runtime_mysql_linkage
 
 prepare_openssl_runtime() {
-    local provider_output cipher_output module_dir legacy_module
-    command -v openssl >/dev/null 2>&1 || fail "OpenSSL CLI is missing from the container"
+    local provider_output cipher_output legacy_module module_dir
+    [[ -x "$SYSTEM_OPENSSL" ]] || fail "Debian system OpenSSL is missing at $SYSTEM_OPENSSL"
+    command -v dpkg-query >/dev/null 2>&1 || fail "dpkg-query is missing from the Debian AMP container"
 
-    module_dir="$(openssl version -m 2>/dev/null | sed -n 's/^MODULESDIR: "\(.*\)"$/\1/p')"
-    [[ -n "$module_dir" ]] || fail "Could not determine the OpenSSL provider module directory"
-    legacy_module="$module_dir/legacy.so"
-    [[ -r "$legacy_module" ]] \
-        || fail "OpenSSL legacy provider module is missing at $legacy_module. Debian 13 requires the separate openssl-provider-legacy package; refresh/recreate the AMP container with the v9 template package list."
+    # Do not use `openssl version -m` through PATH here. Oracle's portable MySQL
+    # includes its own OpenSSL executable whose compiled MODULESDIR points at
+    # /usr/local/mysql/lib64/ossl-modules. AzerothCore uses Debian's libcrypto,
+    # so locate the matching Debian provider module from its owning package.
+    legacy_module="$(dpkg-query -L openssl-provider-legacy 2>/dev/null | awk '/\/legacy\.so$/ {print; exit}')"
+    if [[ -z "$legacy_module" ]]; then
+        legacy_module="$(find /usr/lib /lib -type f -path '*/ossl-modules/legacy.so' -print -quit 2>/dev/null || true)"
+    fi
+    [[ -n "$legacy_module" && -r "$legacy_module" ]] \
+        || fail "Debian OpenSSL legacy provider is not installed. The container requires the openssl-provider-legacy package."
+    module_dir="$(dirname "$legacy_module")"
 
-    # Explicitly pin provider discovery to Debian's active OpenSSL module directory.
-    # This avoids provider lookup ambiguity when the bundled MySQL libraries are also
-    # present in LD_LIBRARY_PATH.
     export OPENSSL_MODULES="$module_dir"
-    log "OpenSSL provider modules: $OPENSSL_MODULES (legacy.so present)"
+    log "Debian OpenSSL provider modules: $OPENSSL_MODULES (legacy.so present)"
 
     cat > "$OPENSSL_CONF_FILE" <<'EOF'
 # AzerothCore 3.3.5a still uses RC4 for the WoW protocol. Under OpenSSL 3,
@@ -269,28 +309,26 @@ activate = 1
 EOF
     chmod 600 "$OPENSSL_CONF_FILE" 2>/dev/null || true
 
-    provider_output="$(OPENSSL_CONF="$OPENSSL_CONF_FILE" OPENSSL_MODULES="$OPENSSL_MODULES" openssl list -providers 2>&1)" \
-        || fail "OpenSSL could not load the AzerothCore provider configuration"
+    provider_output="$(env -u LD_LIBRARY_PATH OPENSSL_CONF="$OPENSSL_CONF_FILE" OPENSSL_MODULES="$OPENSSL_MODULES" "$SYSTEM_OPENSSL" list -providers 2>&1)" \
+        || fail "Debian OpenSSL could not load the AzerothCore provider configuration"
     grep -Eq '^[[:space:]]+default[[:space:]]*$' <<< "$provider_output" \
-        || fail "OpenSSL default provider did not activate"
+        || fail "Debian OpenSSL default provider did not activate"
     grep -Eq '^[[:space:]]+legacy[[:space:]]*$' <<< "$provider_output" \
-        || fail "OpenSSL legacy provider did not activate; RC4 required by WoW 3.3.5a is unavailable"
+        || fail "Debian OpenSSL legacy provider did not activate; RC4 required by WoW 3.3.5a is unavailable"
 
-    cipher_output="$(OPENSSL_CONF="$OPENSSL_CONF_FILE" OPENSSL_MODULES="$OPENSSL_MODULES" openssl list -cipher-algorithms 2>&1)" \
-        || fail "OpenSSL could not enumerate ciphers with the AzerothCore provider configuration"
+    cipher_output="$(env -u LD_LIBRARY_PATH OPENSSL_CONF="$OPENSSL_CONF_FILE" OPENSSL_MODULES="$OPENSSL_MODULES" "$SYSTEM_OPENSSL" list -cipher-algorithms 2>&1)" \
+        || fail "Debian OpenSSL could not enumerate ciphers with the AzerothCore provider configuration"
     grep -Eq '(^|[[:space:]])RC4([[:space:]-]|$)' <<< "$cipher_output" \
-        || fail "OpenSSL legacy provider loaded but RC4 was not available"
+        || fail "Debian OpenSSL legacy provider loaded but RC4 was not available"
 
-    # Exercise the same legacy cipher through EVP before starting a server. This
-    # catches provider/module problems before worldserver reaches its ARC4 ASSERT.
     if ! printf 'amp-azerothcore-rc4-preflight' \
-        | OPENSSL_CONF="$OPENSSL_CONF_FILE" OPENSSL_MODULES="$OPENSSL_MODULES" openssl enc -rc4 \
-            -K 00112233445566778899aabbccddeeff -nosalt >/dev/null 2>&1; then
-        fail "OpenSSL RC4 preflight failed; AzerothCore would crash during ARC4 initialization"
+        | env -u LD_LIBRARY_PATH OPENSSL_CONF="$OPENSSL_CONF_FILE" OPENSSL_MODULES="$OPENSSL_MODULES" \
+            "$SYSTEM_OPENSSL" enc -rc4 -K 00112233445566778899aabbccddeeff -nosalt >/dev/null 2>&1; then
+        fail "Debian OpenSSL RC4 preflight failed; AzerothCore would crash during ARC4 initialization"
     fi
 
     export OPENSSL_CONF="$OPENSSL_CONF_FILE"
-    log "OpenSSL runtime verified: default + legacy providers active, RC4 available"
+    log "OpenSSL runtime verified: Debian default + legacy providers active, RC4 available"
 }
 
 configure_server_files() {
@@ -475,7 +513,7 @@ mysql_server_args() {
 }
 
 mysql_ready() {
-    "$MYSQL_DIR/bin/mysqladmin" --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" ping >/dev/null 2>&1
+    mysqladmin_cli --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" ping >/dev/null 2>&1
 }
 
 verify_azerothcore_database_socket() {
@@ -483,7 +521,7 @@ verify_azerothcore_database_socket() {
 
     # Explicit socket path: matches AzerothCore's documented
     # ".;/path/to/socket;user;password;database" Linux format.
-    auth_identity="$("$MYSQL_DIR/bin/mysql" --no-defaults --protocol=socket --socket="$MYSQL_SOCKET" \
+    auth_identity="$(mysql_cli --no-defaults --protocol=socket --socket="$MYSQL_SOCKET" \
         --user="$DATABASE_USER" --connect-timeout=5 --batch --skip-column-names \
         -e 'SELECT CURRENT_USER();' 2>/dev/null || true)"
     [[ "$auth_identity" == "$DATABASE_USER@localhost" ]] \
@@ -494,7 +532,7 @@ verify_azerothcore_database_socket() {
     # connection then has no explicit unix_socket argument. MySQL documents
     # MYSQL_UNIX_PORT as the default Unix socket for localhost, so verify that
     # exact fallback before starting authserver.
-    fallback_identity="$(MYSQL_UNIX_PORT="$MYSQL_SOCKET" "$MYSQL_DIR/bin/mysql" --no-defaults \
+    fallback_identity="$(MYSQL_UNIX_PORT="$MYSQL_SOCKET" mysql_cli --no-defaults \
         --protocol=socket --host=localhost --user="$DATABASE_USER" --connect-timeout=5 \
         --batch --skip-column-names -e 'SELECT CURRENT_USER();' 2>/dev/null || true)"
     [[ "$fallback_identity" == "$DATABASE_USER@localhost" ]] \
@@ -513,7 +551,7 @@ start_mysql() {
     rm -f "$MYSQL_SOCKET" "$MYSQL_SOCKET.lock" "$MYSQL_PID_FILE"
     mysql_server_args
     log "Starting instance-local MySQL"
-    "$MYSQL_DIR/bin/mysqld" "${MYSQL_SERVER_ARGS[@]}" &
+    env LD_LIBRARY_PATH="$MYSQL_LD_LIBRARY_PATH" "$MYSQL_DIR/bin/mysqld" "${MYSQL_SERVER_ARGS[@]}" &
     MYSQL_PID=$!
 
     while (( timeout_count-- > 0 )); do
@@ -532,7 +570,7 @@ start_mysql() {
 }
 
 create_databases() {
-    "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" <<'SQL'
+    mysql_cli --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" <<'SQL'
 CREATE DATABASE IF NOT EXISTS acore_auth CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS acore_characters CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS acore_world CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -542,7 +580,8 @@ SQL
 
 start_authserver() {
     log "Starting authserver"
-    "$BIN_DIR/authserver" -c "$ETC_DIR/authserver.conf" </dev/null &
+    env LD_LIBRARY_PATH="$ACORE_LD_LIBRARY_PATH" OPENSSL_CONF="$OPENSSL_CONF" OPENSSL_MODULES="$OPENSSL_MODULES" \
+        "$BIN_DIR/authserver" -c "$ETC_DIR/authserver.conf" </dev/null &
     AUTH_PID=$!
 }
 
@@ -550,7 +589,7 @@ wait_for_auth_database() {
     local timeout_count=900 dead_checks=0
     log "Waiting for authserver to create/update the authentication database"
     while (( timeout_count-- > 0 )); do
-        if "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" \
+        if mysql_cli --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" \
             --batch --skip-column-names -e 'SELECT id FROM acore_auth.realmlist LIMIT 1' >/dev/null 2>&1; then
             return
         fi
@@ -579,7 +618,7 @@ update_realm_record() {
     escaped_local_address="$(sql_escape "$REALM_LOCAL_ADDRESS")"
     escaped_subnet="$(sql_escape "$REALM_LOCAL_SUBNET_MASK")"
 
-    "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" <<SQL
+    mysql_cli --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" <<SQL
 INSERT INTO acore_auth.realmlist
     (id, name, address, localAddress, localSubnetMask, port, icon, flag, timezone, allowedSecurityLevel, population, gamebuild)
 VALUES
@@ -603,7 +642,7 @@ port_is_open() {
 
 mysql_scalar() {
     local query="$1"
-    "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" \
+    mysql_cli --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" \
         --batch --skip-column-names --connect-timeout=3 -e "$query" 2>/dev/null | head -n1
 }
 
@@ -646,7 +685,7 @@ emit_server_info() {
     mysql_version="$(cat "$STATE_DIR/mysql-version" 2>/dev/null || true)"
     [[ -n "$mysql_version" ]] || mysql_version="$(installed_report_value 'MySQL version')"
     if [[ -z "$mysql_version" && -x "$MYSQL_DIR/bin/mysqld" ]]; then
-        mysql_version="$("$MYSQL_DIR/bin/mysqld" --version 2>/dev/null | sed -n 's/.*Ver \([0-9][0-9.]*\).*/\1/p' | head -n1)"
+        mysql_version="$(env LD_LIBRARY_PATH="$MYSQL_LD_LIBRARY_PATH" "$MYSQL_DIR/bin/mysqld" --version 2>/dev/null | sed -n 's/.*Ver \([0-9][0-9.]*\).*/\1/p' | head -n1)"
     fi
     [[ -n "$mysql_version" ]] || mysql_version="unknown"
 
@@ -767,7 +806,7 @@ cleanup() {
 
     if mysql_ready; then
         log "Stopping MySQL"
-        "$MYSQL_DIR/bin/mysqladmin" --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" shutdown >/dev/null 2>&1 || true
+        mysqladmin_cli --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" shutdown >/dev/null 2>&1 || true
     fi
     if [[ -n "$MYSQL_PID" ]]; then
         wait "$MYSQL_PID" 2>/dev/null || true
@@ -821,7 +860,8 @@ rm -f "$READY_MARKER" 2>/dev/null || true
 log "Starting worldserver (AMP console input is attached directly to worldserver stdin)"
 # Explicit <&0 prevents Bash's asynchronous-command /dev/null stdin behavior,
 # allowing AMP's writable console and ExitString to reach worldserver directly.
-"$BIN_DIR/worldserver" -c "$ETC_DIR/worldserver.conf" <&0 &
+env LD_LIBRARY_PATH="$ACORE_LD_LIBRARY_PATH" OPENSSL_CONF="$OPENSSL_CONF" OPENSSL_MODULES="$OPENSSL_MODULES" \
+    "$BIN_DIR/worldserver" -c "$ETC_DIR/worldserver.conf" <&0 &
 WORLD_PID=$!
 
 (
