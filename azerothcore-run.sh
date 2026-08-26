@@ -177,7 +177,7 @@ mkdir -p "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" "$BASE_DIR/logs" "$BASE_DIR/temp" "$B
 chmod 700 "$MYSQL_RUN_DIR" 2>/dev/null || true
 LAUNCHER_LOG="$BASE_DIR/logs/amp-launcher.log"
 touch "$LAUNCHER_LOG" 2>/dev/null || true
-log "Launcher v11 starting as user $MYSQL_ADMIN_USER (PID $$)"
+log "Launcher v10 starting as user $MYSQL_ADMIN_USER (PID $$)"
 
 [[ -x "$BIN_DIR/authserver" ]] || fail "authserver is not installed; run Update first"
 [[ -x "$BIN_DIR/worldserver" ]] || fail "worldserver is not installed; run Update first"

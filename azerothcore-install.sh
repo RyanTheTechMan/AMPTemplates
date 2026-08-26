@@ -122,22 +122,6 @@ export MYSQL_UNIX_PORT="$MYSQL_SOCKET"
 MYSQL_LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_DIR/lib:$MYSQL_DIR/lib/private"
 ACORE_LD_LIBRARY_PATH="$MYSQL_COMPAT_DIR:$MYSQL_CLIENT_RUNTIME_DIR"
 
-# Keep Oracle MySQL's private runtime libraries scoped to MySQL processes only.
-# Do not export this globally: doing so can make AzerothCore load Oracle's bundled
-# OpenSSL instead of Debian's OpenSSL/provider modules.
-mysql_env() {
-    env LD_LIBRARY_PATH="$MYSQL_LD_LIBRARY_PATH" "$@"
-}
-mysql_cli() {
-    mysql_env "$MYSQL_DIR/bin/mysql" "$@"
-}
-mysqladmin_cli() {
-    mysql_env "$MYSQL_DIR/bin/mysqladmin" "$@"
-}
-mysqld_cli() {
-    mysql_env "$MYSQL_DIR/bin/mysqld" "$@"
-}
-
 mkdir -p "$STATE_DIR" "$DIST_DIR" "$MYSQL_DATA_DIR" "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" \
     "$BASE_DIR/logs" "$BASE_DIR/temp" "$BASE_DIR/ccache"
 chmod 700 "$MYSQL_DATA_DIR" "$MYSQL_RUN_DIR" 2>/dev/null || true
@@ -229,8 +213,8 @@ stop_temporary_mysql() {
     if is_true "$MYSQL_STARTED_HERE" && [[ -S "$MYSQL_SOCKET" ]]; then
         local database_user
         database_user="$(id -un)"
-        mysqladmin_cli --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" shutdown >/dev/null 2>&1 \
-            || mysqladmin_cli --protocol=socket --socket="$MYSQL_SOCKET" --user=root --password='' shutdown >/dev/null 2>&1 \
+        "$MYSQL_DIR/bin/mysqladmin" --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" shutdown >/dev/null 2>&1 \
+            || "$MYSQL_DIR/bin/mysqladmin" --protocol=socket --socket="$MYSQL_SOCKET" --user=root --password='' shutdown >/dev/null 2>&1 \
             || true
     fi
     if [[ -n "$MYSQL_PID" ]]; then
@@ -254,15 +238,15 @@ install_mysql() {
     local target_version installed_version minor_version archive_url temporary_dir archive_file extracted_dir database_user
     database_user="$(id -un)"
     if [[ -x "$MYSQL_DIR/bin/mysqladmin" && -S "$MYSQL_SOCKET" ]] \
-        && { mysqladmin_cli --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" ping >/dev/null 2>&1 \
-            || mysqladmin_cli --protocol=socket --socket="$MYSQL_SOCKET" --user=root --password='' ping >/dev/null 2>&1; }; then
+        && { "$MYSQL_DIR/bin/mysqladmin" --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" ping >/dev/null 2>&1 \
+            || "$MYSQL_DIR/bin/mysqladmin" --protocol=socket --socket="$MYSQL_SOCKET" --user=root --password='' ping >/dev/null 2>&1; }; then
         fail "The instance-local MySQL server is still running. Stop the AMP instance before running Update."
     fi
 
     target_version="$(determine_mysql_version)"
     installed_version=""
     if [[ -x "$MYSQL_DIR/bin/mysqld" ]]; then
-        installed_version="$(mysqld_cli --version 2>/dev/null | sed -n 's/.*Ver \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n1)"
+        installed_version="$("$MYSQL_DIR/bin/mysqld" --version 2>/dev/null | sed -n 's/.*Ver \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n1)"
     fi
     if [[ "$installed_version" == "$target_version" ]]; then
         log "MySQL $target_version is already installed"
@@ -318,11 +302,11 @@ ensure_mysql_libaio_compat() {
         fail "Debian 13 libaio compatibility library does not export io_getevents"
     fi
 
-    unresolved="$(env LD_LIBRARY_PATH="$MYSQL_LD_LIBRARY_PATH" ldd "$MYSQL_DIR/bin/mysqld" 2>/dev/null | grep 'not found' || true)"
+    unresolved="$(ldd "$MYSQL_DIR/bin/mysqld" 2>/dev/null | grep 'not found' || true)"
     [[ -z "$unresolved" ]] \
         || fail "Portable MySQL still has unresolved runtime dependencies after preparing libaio compatibility: $unresolved"
 
-    mysqld_cli --version >/dev/null 2>&1 \
+    "$MYSQL_DIR/bin/mysqld" --version >/dev/null 2>&1 \
         || fail "Portable MySQL could not start after preparing Debian 13 libaio compatibility"
 
     log "Prepared Debian 13 libaio compatibility for portable MySQL"
@@ -346,7 +330,7 @@ verify_portable_mysql_toolchain() {
     [[ -x "$MYSQL_DIR/bin/mysql_config" ]] || fail "Portable MySQL is missing bin/mysql_config"
     [[ -f "$MYSQL_DIR/include/mysql.h" ]] || fail "Portable MySQL is missing include/mysql.h"
     mysql_client_library="$(find_mysql_client_library)"
-    mysql_config_version="$(mysql_env "$MYSQL_DIR/bin/mysql_config" --version 2>/dev/null || true)"
+    mysql_config_version="$("$MYSQL_DIR/bin/mysql_config" --version 2>/dev/null || true)"
     [[ -n "$mysql_config_version" ]] || fail "Portable MySQL mysql_config could not report its version"
 
     log "MySQL build preflight: version $mysql_config_version"
@@ -395,7 +379,7 @@ mysql_server_args() {
 start_temporary_mysql() {
     local timeout_count=180 database_user
     database_user="$(id -un)"
-    if mysqladmin_cli --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" ping >/dev/null 2>&1; then
+    if "$MYSQL_DIR/bin/mysqladmin" --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" ping >/dev/null 2>&1; then
         log "Using the already-running instance-local MySQL server"
         return
     fi
@@ -403,13 +387,13 @@ start_temporary_mysql() {
     rm -f "$MYSQL_SOCKET" "$MYSQL_SOCKET.lock" "$MYSQL_PID_FILE"
     mysql_server_args
     log "Starting MySQL temporarily for database initialization"
-    env LD_LIBRARY_PATH="$MYSQL_LD_LIBRARY_PATH" "$MYSQL_DIR/bin/mysqld" "${MYSQL_SERVER_ARGS[@]}" &
+    "$MYSQL_DIR/bin/mysqld" "${MYSQL_SERVER_ARGS[@]}" &
     MYSQL_PID=$!
     MYSQL_STARTED_HERE="true"
 
     while (( timeout_count-- > 0 )); do
-        if mysqladmin_cli --protocol=socket --socket="$MYSQL_SOCKET" --user=root --password='' ping >/dev/null 2>&1 \
-            || mysqladmin_cli --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" ping >/dev/null 2>&1; then
+        if "$MYSQL_DIR/bin/mysqladmin" --protocol=socket --socket="$MYSQL_SOCKET" --user=root --password='' ping >/dev/null 2>&1 \
+            || "$MYSQL_DIR/bin/mysqladmin" --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" ping >/dev/null 2>&1; then
             return
         fi
         if ! kill -0 "$MYSQL_PID" 2>/dev/null; then
@@ -450,7 +434,7 @@ initialize_mysql_data() {
         if (( EUID == 0 )); then
             initialize_args+=(--user=root)
         fi
-        mysqld_cli "${initialize_args[@]}"
+        "$MYSQL_DIR/bin/mysqld" "${initialize_args[@]}"
     fi
 
     start_temporary_mysql
@@ -458,9 +442,9 @@ initialize_mysql_data() {
     database_user="$(id -un)"
     escaped_database_user="$(sql_escape "$database_user")"
 
-    if mysql_cli --protocol=socket --socket="$MYSQL_SOCKET" --user=root --password='' -e 'SELECT 1' >/dev/null 2>&1; then
+    if "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user=root --password='' -e 'SELECT 1' >/dev/null 2>&1; then
         log "Securing the initial MySQL accounts"
-        mysql_cli --protocol=socket --socket="$MYSQL_SOCKET" --user=root --password='' <<SQL
+        "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user=root --password='' <<SQL
 FLUSH PRIVILEGES;
 ALTER USER 'root'@'localhost' IDENTIFIED WITH auth_socket;
 CREATE USER IF NOT EXISTS '$escaped_database_user'@'localhost' IDENTIFIED WITH auth_socket;
@@ -473,7 +457,7 @@ FLUSH PRIVILEGES;
 SQL
     fi
 
-    mysql_cli --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" <<'SQL'
+    "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" <<'SQL'
 CREATE DATABASE IF NOT EXISTS acore_auth CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS acore_characters CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS acore_world CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -482,12 +466,12 @@ SQL
 
     # Remove the short-lived earlier TCP-account experiment if this is an upgraded test
     # instance. Socket peer credentials are now the only AzerothCore DB auth path.
-    mysql_cli --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" \
+    "$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" \
         -e "DROP USER IF EXISTS 'acore_amp'@'127.0.0.1'; FLUSH PRIVILEGES;" >/dev/null 2>&1 || true
     rm -f "$LEGACY_MYSQL_PASSWORD_FILE"
 
     local auth_socket_status
-    auth_socket_status="$(mysql_cli --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" \
+    auth_socket_status="$("$MYSQL_DIR/bin/mysql" --protocol=socket --socket="$MYSQL_SOCKET" --user="$database_user" \
         --batch --skip-column-names \
         -e "SELECT PLUGIN_STATUS FROM INFORMATION_SCHEMA.PLUGINS WHERE PLUGIN_NAME='auth_socket';" 2>/dev/null | head -n1)"
     [[ "$auth_socket_status" == "ACTIVE" ]] \
@@ -497,11 +481,11 @@ SQL
     # 1) the documented explicit socket, and 2) the localhost fallback triggered
     # after its connection-info mutation bug. MYSQL_UNIX_PORT must route both to
     # this same private socket.
-    mysql_cli --no-defaults --protocol=socket --socket="$MYSQL_SOCKET" \
+    "$MYSQL_DIR/bin/mysql" --no-defaults --protocol=socket --socket="$MYSQL_SOCKET" \
         --user="$database_user" --connect-timeout=5 -e 'SELECT 1' >/dev/null 2>&1 \
         || fail "Passwordless auth_socket login failed through the explicit instance socket"
 
-    MYSQL_UNIX_PORT="$MYSQL_SOCKET" mysql_cli --no-defaults --protocol=socket \
+    MYSQL_UNIX_PORT="$MYSQL_SOCKET" "$MYSQL_DIR/bin/mysql" --no-defaults --protocol=socket \
         --host=localhost --user="$database_user" --connect-timeout=5 -e 'SELECT 1' >/dev/null 2>&1 \
         || fail "MySQL localhost socket fallback does not resolve through MYSQL_UNIX_PORT=$MYSQL_SOCKET"
 
