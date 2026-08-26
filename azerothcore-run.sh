@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-LAUNCHER_TEMPLATE_VERSION="13"
+LAUNCHER_TEMPLATE_VERSION="14"
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 027

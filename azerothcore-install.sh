@@ -39,7 +39,7 @@ CLIENT_DATA_VERSION="v20.0"
 MYSQL_RELEASE="8.4"
 CUSTOM_MYSQL_VERSION=""
 MYSQL_BUFFER_POOL_MB="1024"
-INSTALLER_TEMPLATE_VERSION="13"
+INSTALLER_TEMPLATE_VERSION="14"
 EXPECTED_TEMPLATE_VERSION=""
 
 while (($#)); do
@@ -75,8 +75,8 @@ log "Installer v$INSTALLER_TEMPLATE_VERSION starting"
 
 [[ -f "$BASE_DIR/azerothcore-run.sh" ]] \
     || fail "The AzerothCore launcher was not downloaded before the installer"
-if ! grep -Fq 'LAUNCHER_TEMPLATE_VERSION="13"' "$BASE_DIR/azerothcore-run.sh"; then
-    fail "Template/runtime version mismatch: installer v$INSTALLER_TEMPLATE_VERSION did not receive launcher v13. Update the configured template repository/ref before retrying."
+if ! grep -Fq 'LAUNCHER_TEMPLATE_VERSION="14"' "$BASE_DIR/azerothcore-run.sh"; then
+    fail "Template/runtime version mismatch: installer v$INSTALLER_TEMPLATE_VERSION did not receive launcher v14. Update the configured template repository/ref before retrying."
 fi
 
 case "$BUILD_TYPE" in
