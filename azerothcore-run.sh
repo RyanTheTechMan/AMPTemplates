@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+LAUNCHER_TEMPLATE_VERSION="13"
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 027
@@ -177,7 +178,7 @@ mkdir -p "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" "$BASE_DIR/logs" "$BASE_DIR/temp" "$B
 chmod 700 "$MYSQL_RUN_DIR" 2>/dev/null || true
 LAUNCHER_LOG="$BASE_DIR/logs/amp-launcher.log"
 touch "$LAUNCHER_LOG" 2>/dev/null || true
-log "Launcher v10 starting as user $MYSQL_ADMIN_USER (PID $$)"
+log "Launcher v$LAUNCHER_TEMPLATE_VERSION starting as user $MYSQL_ADMIN_USER (PID $$)"
 
 [[ -x "$BIN_DIR/authserver" ]] || fail "authserver is not installed; run Update first"
 [[ -x "$BIN_DIR/worldserver" ]] || fail "worldserver is not installed; run Update first"
@@ -585,25 +586,88 @@ start_authserver() {
     AUTH_PID=$!
 }
 
-wait_for_auth_database() {
-    local timeout_count=900 dead_checks=0
-    log "Waiting for authserver to create/update the authentication database"
+repair_auth_base_schema() {
+    local base_dir="$BASE_DIR/source/data/sql/base/db_auth"
+    local file table_name exists repaired=0 checked=0 missing=0
+    local -a sql_files=()
+
+    [[ -d "$base_dir" ]] || fail "Authentication base schema directory is missing: $base_dir"
+
+    shopt -s nullglob
+    sql_files=("$base_dir"/*.sql)
+    shopt -u nullglob
+    (( ${#sql_files[@]} > 0 )) || fail "No authentication base-schema SQL files were found in $base_dir"
+
+    log "Checking authentication base schema for interrupted/partial first-run imports"
+    for file in "${sql_files[@]}"; do
+        table_name="$(basename "$file" .sql)"
+
+        # AzerothCore's auth base directory uses one table per same-named SQL
+        # file. Only repair files that declare that expected table; this avoids
+        # replaying an unrelated base file against an existing database.
+        if ! grep -Eq "CREATE TABLE( IF NOT EXISTS)? \`$table_name\`" "$file"; then
+            continue
+        fi
+
+        checked=$((checked + 1))
+        exists="$(mysql_scalar "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='acore_auth' AND table_name='$(sql_escape "$table_name")';")"
+        if [[ "$exists" != "1" ]]; then
+            log "Repairing missing authentication base table '$table_name' from $(basename "$file")"
+            mysql_cli --no-defaults --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" \
+                acore_auth < "$file" \
+                || fail "Failed to import missing authentication base table '$table_name' from $file"
+            repaired=$((repaired + 1))
+        fi
+    done
+
+    (( checked > 0 )) || fail "Could not identify any same-named authentication base tables in $base_dir"
+
+    # Verify the full same-named base-table set after repairs. AzerothCore's
+    # Populate() intentionally skips base import as soon as SHOW TABLES returns
+    # any rows, so a previously interrupted import otherwise remains incomplete.
+    for file in "${sql_files[@]}"; do
+        table_name="$(basename "$file" .sql)"
+        if ! grep -Eq "CREATE TABLE( IF NOT EXISTS)? \`$table_name\`" "$file"; then
+            continue
+        fi
+        exists="$(mysql_scalar "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='acore_auth' AND table_name='$(sql_escape "$table_name")';")"
+        if [[ "$exists" != "1" ]]; then
+            log "Authentication base table is still missing after repair: $table_name"
+            missing=$((missing + 1))
+        fi
+    done
+    (( missing == 0 )) || fail "Authentication base schema is incomplete after repair ($missing table(s) still missing)"
+
+    if (( repaired > 0 )); then
+        log "Authentication base schema repaired successfully ($repaired missing table(s) restored; $checked checked)"
+    else
+        log "Authentication base schema verified complete ($checked table(s) checked)"
+    fi
+}
+
+wait_for_authserver_ready() {
+    local phase="${1:-authserver}" timeout_count=900 dead_checks=0
+    log "Waiting for $phase to finish database setup and listen on 127.0.0.1:$AUTH_PORT"
     while (( timeout_count-- > 0 )); do
-        if mysql_cli --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" \
-            --batch --skip-column-names -e 'SELECT id FROM acore_auth.realmlist LIMIT 1' >/dev/null 2>&1; then
-            return
+        if [[ -n "$AUTH_PID" ]] && process_is_running "$AUTH_PID" && port_is_open 127.0.0.1 "$AUTH_PORT"; then
+            log "$phase is ready on authentication port $AUTH_PORT"
+            return 0
         fi
         if [[ -n "$AUTH_PID" ]] && ! process_is_running "$AUTH_PID"; then
-            ((dead_checks+=1))
-            if (( dead_checks > 10 )); then
+            dead_checks=$((dead_checks + 1))
+            if (( dead_checks >= 3 )); then
                 wait "$AUTH_PID" 2>/dev/null || true
                 AUTH_PID=""
-                fail "authserver exited before the authentication database became ready"
+                tail -n 120 "$BASE_DIR/logs/Auth.log" >&2 2>/dev/null || true
+                tail -n 120 "$BASE_DIR/logs/Errors.log" >&2 2>/dev/null || true
+                fail "$phase exited before becoming ready"
             fi
+        else
+            dead_checks=0
         fi
         sleep 1
     done
-    fail "Timed out waiting for acore_auth.realmlist"
+    fail "Timed out waiting for $phase to listen on authentication port $AUTH_PORT"
 }
 
 update_realm_record() {
@@ -832,29 +896,16 @@ verify_azerothcore_database_socket
 create_databases
 configure_server_files
 prepare_openssl_runtime
-
-cd "$BIN_DIR"
-start_authserver
-wait_for_auth_database
+repair_auth_base_schema
 update_realm_record
 
-# The first authserver run doubles as the authentication-schema bootstrap.
-# Restart it unconditionally after the realm row exists so RealmList is loaded
-# from a known-good database state instead of depending on first-run timing.
-if process_is_running "$AUTH_PID"; then
-    log "Restarting authserver after database/realm bootstrap"
-    stop_pid_gracefully "$AUTH_PID" "bootstrap authserver" 30
-else
-    wait "$AUTH_PID" 2>/dev/null || true
-fi
-AUTH_PID=""
+# The template prepares the official authentication base schema before starting
+# authserver, so no bootstrap authserver/restart cycle is necessary. AzerothCore
+# performs its normal updates and prepared-statement validation on this single
+# start. The auth port is only opened after DB load and realm initialization.
+cd "$BIN_DIR"
 start_authserver
-sleep 2
-if ! process_is_running "$AUTH_PID"; then
-    tail -n 120 "$BASE_DIR/logs/Server.log" >&2 2>/dev/null || true
-    tail -n 120 "$BASE_DIR/logs/Errors.log" >&2 2>/dev/null || true
-    fail "authserver failed to stay running after database/realm bootstrap"
-fi
+wait_for_authserver_ready "authserver"
 
 rm -f "$READY_MARKER" 2>/dev/null || true
 log "Starting worldserver (AMP console input is attached directly to worldserver stdin)"

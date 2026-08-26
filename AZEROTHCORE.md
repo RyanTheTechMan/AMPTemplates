@@ -369,6 +369,15 @@ An AMP instance backup/snapshot of the whole persistent directory is preferable 
 
 For a live server, stop the instance before taking a raw filesystem copy of the MySQL data directory unless you are using a database-aware backup method.
 
+### Template/runtime version synchronization
+
+The AMP template downloads `azerothcore-install.sh` and `azerothcore-run.sh` from the Git repository/ref selected by **Template Repository Ref**. The KVP/JSON template and those runtime scripts must come from the same revision.
+
+Template v13 passes its expected version to the downloaded installer and requires the downloaded launcher to declare the same version. A stale branch now fails immediately with a clear `Template/runtime version mismatch` message, before MySQL or client data is downloaded. The script URLs also include a version-specific cache-busting query parameter.
+
+For the normal repository setup, keep **Template Repository Ref** set to `main` and make sure `main` contains the same v13 files as the imported template.
+
+
 ## 17. Troubleshooting
 
 ### AzerothCore does not appear in Create Instance
@@ -409,9 +418,9 @@ verify that the instance is using `cubecoders/ampbase:debian`, fetch the current
 
 Debian 13 packages the OpenSSL legacy provider separately as `openssl-provider-legacy`. The AMP template installs that package because WoW 3.3.5a uses RC4; startup verifies `legacy.so` and refuses to launch if the container has not been refreshed with the required provider.
 
-Template v10 uses the long-lived launcher lifecycle: AMP tracks the long-lived `azerothcore-run.sh` launcher instead of promoting `worldserver` to the monitored process. The long-lived `azerothcore-run.sh` launcher is now the process AMP tracks while it starts MySQL, performs first-run database work, starts `authserver`, and finally launches `worldserver`. This avoids AMP timing out while waiting for a child process that does not exist yet during database bootstrap.
+Template v13 uses the long-lived launcher lifecycle: AMP tracks the long-lived `azerothcore-run.sh` launcher instead of promoting `worldserver` to the monitored process. The long-lived `azerothcore-run.sh` launcher is now the process AMP tracks while it starts MySQL, performs first-run database work, starts `authserver`, and finally launches `worldserver`. This avoids AMP timing out while waiting for a child process that does not exist yet during database bootstrap.
 
-If a current v9 instance still exits during startup, inspect both the application console and:
+If a current v13 instance still exits during startup, inspect both the application console and:
 
 ```text
 logs/amp-launcher.log
@@ -422,7 +431,7 @@ The launcher now records its own lifecycle/failure messages there and prints rec
 
 ### Internal MySQL transport and `/tmp/mysql.sock`
 
-Template v10 uses a **Unix domain socket only** for the instance-local MySQL server. TCP networking is disabled with `--skip-networking`; there is no MySQL application port to expose or forward.
+Template v13 uses a **Unix domain socket only** for the instance-local MySQL server. TCP networking is disabled with `--skip-networking`; there is no MySQL application port to expose or forward.
 
 AzerothCore's documented Linux database format is:
 
@@ -579,4 +588,10 @@ For Playerbots distributions only, the launcher publishes one additional custom 
 
 ### OpenSSL provider isolation
 
-The template deliberately uses Debian's `/usr/bin/openssl` and locates `legacy.so` from the `openssl-provider-legacy` package. Oracle's portable MySQL distribution may include its own OpenSSL tooling whose compiled provider path points at `/usr/local/mysql`; that OpenSSL must not be used for AzerothCore. v10 also isolates MySQL's private library directory from `authserver` and `worldserver` so Debian's legacy provider is loaded by the matching Debian `libcrypto`.
+The template deliberately uses Debian's `/usr/bin/openssl` and locates `legacy.so` from the `openssl-provider-legacy` package. Oracle's portable MySQL distribution may include its own OpenSSL tooling whose compiled provider path points at `/usr/local/mysql`; that OpenSSL must not be used for AzerothCore. v13 also isolates MySQL's private library directory from `authserver` and `worldserver` so Debian's legacy provider is loaded by the matching Debian `libcrypto`.
+
+### Authentication database bootstrap repair
+
+Template v13 verifies the authentication base schema before starting `authserver`. AzerothCore only auto-populates a base database when `SHOW TABLES` returns zero rows. Earlier template revisions used the appearance of `realmlist` as a readiness signal and could stop the first bootstrap while later alphabetically sorted base files (notably `uptime.sql`) were still pending. That leaves a non-empty but incomplete database that AzerothCore will not automatically repopulate.
+
+v13 checks each same-named table SQL file in `source/data/sql/base/db_auth`, imports only missing base tables, verifies the set again, writes the realm row, starts `authserver` once, and waits for the authentication TCP port to be listening. The listener is created only after AzerothCore finishes database load/update/prepared-statement validation and realm initialization. This automatically repairs instances affected by the earlier race without deleting accounts or characters.
