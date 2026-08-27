@@ -11,7 +11,7 @@
     "UpdateStageName": "Download AzerothCore Installer",
     "UpdateSourcePlatform": "Linux",
     "UpdateSource": "FetchURL",
-    "UpdateSourceData": "https://raw.githubusercontent.com/RyanTheTechMan/AMPTemplates/{{TemplateRepositoryRef}}/azerothcore-install.sh?amp-template-version=14",
+    "UpdateSourceData": "https://raw.githubusercontent.com/RyanTheTechMan/AMPTemplates/{{TemplateRepositoryRef}}/azerothcore-install.sh?amp-template-version=15",
     "UpdateSourceArgs": "azerothcore-install.sh",
     "UpdateSourceTarget": "{{$FullBaseDir}}",
     "OverwriteExistingFiles": true,
@@ -21,7 +21,7 @@
     "UpdateStageName": "Download AzerothCore Launcher",
     "UpdateSourcePlatform": "Linux",
     "UpdateSource": "FetchURL",
-    "UpdateSourceData": "https://raw.githubusercontent.com/RyanTheTechMan/AMPTemplates/{{TemplateRepositoryRef}}/azerothcore-run.sh?amp-template-version=14",
+    "UpdateSourceData": "https://raw.githubusercontent.com/RyanTheTechMan/AMPTemplates/{{TemplateRepositoryRef}}/azerothcore-run.sh?amp-template-version=15",
     "UpdateSourceArgs": "azerothcore-run.sh",
     "UpdateSourceTarget": "{{$FullBaseDir}}",
     "OverwriteExistingFiles": true,
@@ -46,7 +46,7 @@
     "UpdateSourcePlatform": "Linux",
     "UpdateSource": "Executable",
     "UpdateSourceData": "/bin/bash",
-    "UpdateSourceArgs": "\"{{$FullBaseDir}}azerothcore-install.sh\" --base-dir \"{{$FullBaseDir}}\" --distribution \"{{ServerDistribution}}\" --custom-core-repository \"{{CustomCoreRepository}}\" --custom-core-ref \"{{CustomCoreRef}}\" --custom-playerbots-repository \"{{CustomPlayerbotsRepository}}\" --custom-playerbots-ref \"{{CustomPlayerbotsRef}}\" --additional-modules \"{{AdditionalModules}}\" --build-type \"{{BuildType}}\" --build-threads \"{{BuildThreads}}\" --force-clean-build \"{{ForceCleanBuild}}\" --extra-cmake-options \"{{ExtraCMakeOptions}}\" --install-client-data \"{{InstallClientData}}\" --client-data-version \"{{ClientDataVersion}}\" --mysql-release \"{{MySQLRelease}}\" --custom-mysql-version \"{{CustomMySQLVersion}}\" --mysql-buffer-pool-mb \"{{MySQLBufferPoolMB}}\" --expected-template-version \"14\"",
+    "UpdateSourceArgs": "\"{{$FullBaseDir}}azerothcore-install.sh\" --base-dir \"{{$FullBaseDir}}\" --distribution \"{{ServerDistribution}}\" --custom-core-repository \"{{CustomCoreRepository}}\" --custom-core-ref \"{{CustomCoreRef}}\" --custom-playerbots-repository \"{{CustomPlayerbotsRepository}}\" --custom-playerbots-ref \"{{CustomPlayerbotsRef}}\" --additional-modules \"{{AdditionalModules}}\" --build-type \"{{BuildType}}\" --build-threads \"{{BuildThreads}}\" --force-clean-build \"{{ForceCleanBuild}}\" --extra-cmake-options \"{{ExtraCMakeOptions}}\" --install-client-data \"{{InstallClientData}}\" --client-data-version \"{{ClientDataVersion}}\" --mysql-release \"{{MySQLRelease}}\" --custom-mysql-version \"{{CustomMySQLVersion}}\" --mysql-buffer-pool-mb \"{{MySQLBufferPoolMB}}\" --expected-template-version \"15\"",
     "ProcessToolOutput": true,
     "SkipOnFailure": false
   }

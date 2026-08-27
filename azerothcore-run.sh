@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-LAUNCHER_TEMPLATE_VERSION="14"
+LAUNCHER_TEMPLATE_VERSION="15"
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 027
@@ -796,6 +796,27 @@ emit_metrics() {
     printf 'AMP_AZEROTHCORE_METRICS BotsOnline=%s\n' "$bots_online"
 }
 
+monitor_signal_exit() {
+    # Background monitors normally sleep between checks. A plain TERM sent to a
+    # Bash subshell can leave its external `sleep` child holding AMP's console
+    # pipe open until the full interval expires. Kill/reap that child so Stop
+    # completes immediately after the managed services have shut down.
+    if [[ -n "${MONITOR_SLEEP_PID:-}" ]]; then
+        kill -TERM "$MONITOR_SLEEP_PID" 2>/dev/null || true
+        wait "$MONITOR_SLEEP_PID" 2>/dev/null || true
+        MONITOR_SLEEP_PID=""
+    fi
+    exit 0
+}
+
+monitor_sleep() {
+    local delay="$1"
+    sleep "$delay" &
+    MONITOR_SLEEP_PID=$!
+    wait "$MONITOR_SLEEP_PID" 2>/dev/null || true
+    MONITOR_SLEEP_PID=""
+}
+
 start_metrics_monitor() {
     # Standard AzerothCore intentionally publishes no custom metrics. AMP's
     # built-in Active Users list/count remains the single human-player metric.
@@ -805,17 +826,20 @@ start_metrics_monitor() {
     fi
 
     (
+        MONITOR_SLEEP_PID=""
+        trap monitor_signal_exit TERM INT HUP
+
         while process_is_running "$WORLD_PID" && [[ ! -f "$READY_MARKER" ]]; do
-            sleep 1
+            monitor_sleep 1
         done
         process_is_running "$WORLD_PID" || exit 0
 
         # Keep first-boot SQL/import output readable and avoid metrics being spliced
         # into database updater lines. Metrics begin only after AMP readiness.
-        sleep "$METRICS_INTERVAL_SECONDS"
+        monitor_sleep "$METRICS_INTERVAL_SECONDS"
         while process_is_running "$WORLD_PID"; do
             emit_metrics
-            sleep "$METRICS_INTERVAL_SECONDS"
+            monitor_sleep "$METRICS_INTERVAL_SECONDS"
         done
     ) &
     METRICS_PID=$!
@@ -857,16 +881,14 @@ cleanup() {
     CLEANED_UP="true"
     rm -f "$READY_MARKER" 2>/dev/null || true
 
-    if [[ -n "$READY_PID" ]]; then
-        kill "$READY_PID" 2>/dev/null || true
-        wait "$READY_PID" 2>/dev/null || true
-    fi
-    if [[ -n "$METRICS_PID" ]]; then
-        kill "$METRICS_PID" 2>/dev/null || true
-        wait "$METRICS_PID" 2>/dev/null || true
-    fi
+    log "Finalizing shutdown: stopping background monitors, authserver, and MySQL"
+    stop_pid_gracefully "$READY_PID" "readiness monitor" 5
+    READY_PID=""
+    stop_pid_gracefully "$METRICS_PID" "metrics monitor" 5
+    METRICS_PID=""
     stop_pid_gracefully "$WORLD_PID" "worldserver" 60
     stop_pid_gracefully "$AUTH_PID" "authserver" 30
+    AUTH_PID=""
 
     if mysql_ready; then
         log "Stopping MySQL"
@@ -874,7 +896,9 @@ cleanup() {
     fi
     if [[ -n "$MYSQL_PID" ]]; then
         wait "$MYSQL_PID" 2>/dev/null || true
+        MYSQL_PID=""
     fi
+    log "Shutdown complete"
 }
 
 handle_signal() {
@@ -916,6 +940,8 @@ env LD_LIBRARY_PATH="$ACORE_LD_LIBRARY_PATH" OPENSSL_CONF="$OPENSSL_CONF" OPENSS
 WORLD_PID=$!
 
 (
+    MONITOR_SLEEP_PID=""
+    trap monitor_signal_exit TERM INT HUP
     timeout_count=3600
     while (( timeout_count-- > 0 )); do
         if ! process_is_running "$AUTH_PID"; then
@@ -934,14 +960,14 @@ WORLD_PID=$!
                     printf '[AMP/AzerothCore] ERROR: worldserver became unhealthy during the %ss readiness grace period\n' "$READY_STABILITY_SECONDS" >&2
                     exit 1
                 fi
-                sleep 1
+                monitor_sleep 1
             done
             emit_server_info
             touch "$READY_MARKER"
             printf 'AMP_AZEROTHCORE_READY\n'
             exit 0
         fi
-        sleep 1
+        monitor_sleep 1
     done
     printf '[AMP/AzerothCore] ERROR: Timed out waiting for worldserver port %s\n' "$WORLD_PORT" >&2
     exit 1
