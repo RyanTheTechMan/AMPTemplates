@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-LAUNCHER_TEMPLATE_VERSION="15"
+LAUNCHER_TEMPLATE_VERSION="16"
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 027
@@ -853,6 +853,69 @@ process_is_running() {
     [[ "$state" != Z* ]]
 }
 
+child_pids() {
+    local parent_pid="$1"
+    ps -eo pid=,ppid= 2>/dev/null | awk -v parent="$parent_pid" '$2 == parent { print $1 }'
+}
+
+kill_process_tree() {
+    local pid="$1" signal_name="${2:-TERM}" child
+    [[ -n "$pid" ]] || return 0
+
+    # Kill descendants before their parent. This is important for the metrics
+    # and readiness helpers: Bash can be blocked in wait(2) on an external sleep
+    # or MySQL CLI child and may not run its TERM trap until that child exits.
+    # Leaving that child alive also leaves AMP's console pipe open.
+    while IFS= read -r child; do
+        [[ -n "$child" ]] || continue
+        kill_process_tree "$child" "$signal_name"
+    done < <(child_pids "$pid")
+
+    kill -"$signal_name" "$pid" 2>/dev/null || true
+}
+
+process_tree_is_running() {
+    local pid="$1" child
+    if process_is_running "$pid"; then
+        return 0
+    fi
+    while IFS= read -r child; do
+        [[ -n "$child" ]] || continue
+        if process_tree_is_running "$child"; then
+            return 0
+        fi
+    done < <(child_pids "$pid")
+    return 1
+}
+
+stop_pid_tree_gracefully() {
+    local pid="$1" name="$2" timeout_count="${3:-5}"
+    [[ -n "$pid" ]] || return
+
+    if ! process_is_running "$pid"; then
+        wait "$pid" 2>/dev/null || true
+        return
+    fi
+
+    log "Stopping $name"
+    kill_process_tree "$pid" TERM
+    while (( timeout_count-- > 0 )); do
+        if ! process_is_running "$pid"; then
+            wait "$pid" 2>/dev/null || true
+            log "$name stopped"
+            return
+        fi
+        # Reap any child that was created between the initial tree walk and TERM.
+        kill_process_tree "$pid" TERM
+        sleep 1
+    done
+
+    log "$name did not stop in time; killing its remaining process tree"
+    kill_process_tree "$pid" KILL
+    wait "$pid" 2>/dev/null || true
+    log "$name stopped"
+}
+
 stop_pid_gracefully() {
     local pid="$1" name="$2" timeout_count="${3:-30}"
     [[ -n "$pid" ]] || return
@@ -882,9 +945,9 @@ cleanup() {
     rm -f "$READY_MARKER" 2>/dev/null || true
 
     log "Finalizing shutdown: stopping background monitors, authserver, and MySQL"
-    stop_pid_gracefully "$READY_PID" "readiness monitor" 5
+    stop_pid_tree_gracefully "$READY_PID" "readiness monitor" 3
     READY_PID=""
-    stop_pid_gracefully "$METRICS_PID" "metrics monitor" 5
+    stop_pid_tree_gracefully "$METRICS_PID" "metrics monitor" 3
     METRICS_PID=""
     stop_pid_gracefully "$WORLD_PID" "worldserver" 60
     stop_pid_gracefully "$AUTH_PID" "authserver" 30
