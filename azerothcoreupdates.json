@@ -11,7 +11,7 @@
     "UpdateStageName": "Download AzerothCore Installer",
     "UpdateSourcePlatform": "Linux",
     "UpdateSource": "FetchURL",
-    "UpdateSourceData": "https://raw.githubusercontent.com/RyanTheTechMan/AMPTemplates/{{TemplateRepositoryRef}}/azerothcore-install.sh?amp-template-version=16",
+    "UpdateSourceData": "https://raw.githubusercontent.com/RyanTheTechMan/AMPTemplates/{{TemplateRepositoryRef}}/azerothcore-install.sh?amp-template-version=17",
     "UpdateSourceArgs": "azerothcore-install.sh",
     "UpdateSourceTarget": "{{$FullBaseDir}}",
     "OverwriteExistingFiles": true,
@@ -21,8 +21,18 @@
     "UpdateStageName": "Download AzerothCore Launcher",
     "UpdateSourcePlatform": "Linux",
     "UpdateSource": "FetchURL",
-    "UpdateSourceData": "https://raw.githubusercontent.com/RyanTheTechMan/AMPTemplates/{{TemplateRepositoryRef}}/azerothcore-run.sh?amp-template-version=16",
+    "UpdateSourceData": "https://raw.githubusercontent.com/RyanTheTechMan/AMPTemplates/{{TemplateRepositoryRef}}/azerothcore-run.sh?amp-template-version=17",
     "UpdateSourceArgs": "azerothcore-run.sh",
+    "UpdateSourceTarget": "{{$FullBaseDir}}",
+    "OverwriteExistingFiles": true,
+    "SkipOnFailure": false
+  },
+  {
+    "UpdateStageName": "Download AzerothCore Shutdown Watchdog",
+    "UpdateSourcePlatform": "Linux",
+    "UpdateSource": "FetchURL",
+    "UpdateSourceData": "https://raw.githubusercontent.com/RyanTheTechMan/AMPTemplates/{{TemplateRepositoryRef}}/azerothcore-watchdog.sh?amp-template-version=17",
+    "UpdateSourceArgs": "azerothcore-watchdog.sh",
     "UpdateSourceTarget": "{{$FullBaseDir}}",
     "OverwriteExistingFiles": true,
     "SkipOnFailure": false
@@ -42,11 +52,18 @@
     "SkipOnFailure": false
   },
   {
+    "UpdateStageName": "Make Shutdown Watchdog Executable",
+    "UpdateSourcePlatform": "Linux",
+    "UpdateSource": "SetExecutableFlag",
+    "UpdateSourceArgs": "{{$FullBaseDir}}azerothcore-watchdog.sh",
+    "SkipOnFailure": false
+  },
+  {
     "UpdateStageName": "Install or Update AzerothCore",
     "UpdateSourcePlatform": "Linux",
     "UpdateSource": "Executable",
     "UpdateSourceData": "/bin/bash",
-    "UpdateSourceArgs": "\"{{$FullBaseDir}}azerothcore-install.sh\" --base-dir \"{{$FullBaseDir}}\" --distribution \"{{ServerDistribution}}\" --custom-core-repository \"{{CustomCoreRepository}}\" --custom-core-ref \"{{CustomCoreRef}}\" --custom-playerbots-repository \"{{CustomPlayerbotsRepository}}\" --custom-playerbots-ref \"{{CustomPlayerbotsRef}}\" --additional-modules \"{{AdditionalModules}}\" --build-type \"{{BuildType}}\" --build-threads \"{{BuildThreads}}\" --force-clean-build \"{{ForceCleanBuild}}\" --extra-cmake-options \"{{ExtraCMakeOptions}}\" --install-client-data \"{{InstallClientData}}\" --client-data-version \"{{ClientDataVersion}}\" --mysql-release \"{{MySQLRelease}}\" --custom-mysql-version \"{{CustomMySQLVersion}}\" --mysql-buffer-pool-mb \"{{MySQLBufferPoolMB}}\" --expected-template-version \"16\"",
+    "UpdateSourceArgs": "\"{{$FullBaseDir}}azerothcore-install.sh\" --base-dir \"{{$FullBaseDir}}\" --distribution \"{{ServerDistribution}}\" --custom-core-repository \"{{CustomCoreRepository}}\" --custom-core-ref \"{{CustomCoreRef}}\" --custom-playerbots-repository \"{{CustomPlayerbotsRepository}}\" --custom-playerbots-ref \"{{CustomPlayerbotsRef}}\" --additional-modules \"{{AdditionalModules}}\" --build-type \"{{BuildType}}\" --build-threads \"{{BuildThreads}}\" --force-clean-build \"{{ForceCleanBuild}}\" --extra-cmake-options \"{{ExtraCMakeOptions}}\" --install-client-data \"{{InstallClientData}}\" --client-data-version \"{{ClientDataVersion}}\" --mysql-release \"{{MySQLRelease}}\" --custom-mysql-version \"{{CustomMySQLVersion}}\" --mysql-buffer-pool-mb \"{{MySQLBufferPoolMB}}\" --expected-template-version \"17\"",
     "ProcessToolOutput": true,
     "SkipOnFailure": false
   }

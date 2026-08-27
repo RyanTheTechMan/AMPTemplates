@@ -371,11 +371,11 @@ For a live server, stop the instance before taking a raw filesystem copy of the 
 
 ### Template/runtime version synchronization
 
-The AMP template downloads `azerothcore-install.sh` and `azerothcore-run.sh` from the Git repository/ref selected by **Template Repository Ref**. The KVP/JSON template and those runtime scripts must come from the same revision.
+The AMP template downloads `azerothcore-install.sh`, `azerothcore-run.sh`, and `azerothcore-watchdog.sh` from the Git repository/ref selected by **Template Repository Ref**. The KVP/JSON template and those runtime scripts must come from the same revision.
 
-Template v16 passes its expected version to the downloaded installer and requires the downloaded launcher to declare the same version. A stale branch now fails immediately with a clear `Template/runtime version mismatch` message, before MySQL or client data is downloaded. The script URLs also include a version-specific cache-busting query parameter.
+Template v17 passes its expected version to the downloaded installer and requires both the downloaded launcher and shutdown watchdog to declare the same version. A stale branch now fails immediately with a clear `Template/runtime version mismatch` message, before MySQL or client data is downloaded. The script URLs also include a version-specific cache-busting query parameter.
 
-For the normal repository setup, keep **Template Repository Ref** set to `main` and make sure `main` contains the same v16 files as the imported template.
+For the normal repository setup, keep **Template Repository Ref** set to `main` and make sure `main` contains the same v17 files as the imported template.
 
 
 ## 17. Troubleshooting
@@ -418,9 +418,9 @@ verify that the instance is using `cubecoders/ampbase:debian`, fetch the current
 
 Debian 13 packages the OpenSSL legacy provider separately as `openssl-provider-legacy`. The AMP template installs that package because WoW 3.3.5a uses RC4; startup verifies `legacy.so` and refuses to launch if the container has not been refreshed with the required provider.
 
-Template v16 keeps `azerothcore-run.sh` as the long-lived supervisor for MySQL/authserver setup and cleanup, but configures AMP's child-process monitor to select the spawned `worldserver` process once it exists. That gives AMP meaningful worldserver CPU/RAM readings and a cleaner application-stop signal while retaining the launcher lifecycle needed for first-run database bootstrap.
+Template v17 keeps AMP's child-process monitor on `worldserver` so CPU/RAM readings are meaningful, while adding a detached `azerothcore-watchdog.sh` lifecycle owner. The watchdog is re-parented outside the launcher/worldserver process tree and therefore survives if AMP stops tracking `worldserver` and tears down the launcher before its EXIT trap finishes. It then stops helper monitors, `authserver`, and MySQL in the correct order.
 
-If a current v16 instance still exits during startup, inspect both the application console and:
+If a current v17 instance still exits during startup, inspect both the application console and:
 
 ```text
 logs/amp-launcher.log
@@ -431,7 +431,7 @@ The launcher now records its own lifecycle/failure messages there and prints rec
 
 ### Internal MySQL transport and `/tmp/mysql.sock`
 
-Template v16 uses a **Unix domain socket only** for the instance-local MySQL server. TCP networking is disabled with `--skip-networking`; there is no MySQL application port to expose or forward.
+Template v17 uses a **Unix domain socket only** for the instance-local MySQL server. TCP networking is disabled with `--skip-networking`; there is no MySQL application port to expose or forward.
 
 AzerothCore's documented Linux database format is:
 
@@ -583,23 +583,23 @@ A new instance can spend several minutes importing the Character, World, and Pla
 
 AMP sends `server shutdown 1` to `worldserver` and waits for the long-lived launcher to finish. A Playerbots server may remain in **Stopping** while AzerothCore logs out every online bot, drains pending character-database writes, closes the World/Character/Auth/Playerbots pools, then lets the launcher stop `authserver` and MySQL. This is an orderly data-preserving shutdown rather than a hang; `worldserver exited with status 0` indicates success.
 
-Template v16 additionally terminates readiness/metrics helpers as process trees, descendants first. This fixes the remaining case where the Bash metrics wrapper could be blocked waiting on an external `sleep` or MySQL CLI child and leave AMP stuck in **Stopping** after `worldserver exited with status 0`. The launcher now logs `metrics monitor stopped` before continuing to authserver/MySQL cleanup. Time spent *before* the worldserver exit can still be genuine Playerbots logout/database-flush work.
+Template v17 also adds an independent shutdown watchdog. If AMP removes the launcher after the monitored `worldserver` exits, the watchdog continues cleanup instead of leaving `authserver` and `mysqld` orphaned under the container's `tini` process. It stops `authserver` before MySQL, requests a bounded `mysqladmin shutdown`, then escalates to SIGTERM and finally SIGKILL if MySQL does not exit. The AMP **Kill** action therefore has a reliable full-stack cleanup path as well. Time spent *before* `worldserver exited with status 0` can still be genuine Playerbots logout/database-flush work.
 
 ### AMP player/status metrics
 
 AMP's native **Active Users** count/list is driven by AzerothCore's real-player login and logout messages. Playerbot sessions are socketless and are deliberately excluded from those join/leave matches, so Active Users represents human players.
 
-> **v16 Playerbots tracking:** Playerbots log sessions with `IP: bot`. The AMP join/leave regex explicitly rejects that synthetic endpoint, so bots do not appear under **Active Users**; they are represented only by **Bots Online**.
+> **v17 Playerbots tracking:** Playerbots log sessions with `IP: bot`. The AMP join/leave regex explicitly rejects that synthetic endpoint, so bots do not appear under **Active Users**; they are represented only by **Bots Online**.
 
-For Playerbots distributions only, the launcher publishes one additional custom metric: **Bots Online**. It is calculated from online character sessions minus real socket-backed account sessions, which covers randombots, addclass bots, and player altbots without depending on a particular bot-account prefix. Standard AzerothCore distributions do not emit this custom metric, so their dashboard shows only AMP's native Active Users metric. The internal `AMP_AZEROTHCORE_METRICS ...` transport line is hidden from AMP's visible console in v16 while remaining available to the metrics parser.
+For Playerbots distributions only, the launcher publishes one additional custom metric: **Bots Online**. It is calculated from online character sessions minus real socket-backed account sessions, which covers randombots, addclass bots, and player altbots without depending on a particular bot-account prefix. Standard AzerothCore distributions do not emit this custom metric, so their dashboard shows only AMP's native Active Users metric. The internal `AMP_AZEROTHCORE_METRICS ...` transport line is hidden from AMP's visible console in v17 while remaining available to the metrics parser.
 
 
 ### OpenSSL provider isolation
 
-The template deliberately uses Debian's `/usr/bin/openssl` and locates `legacy.so` from the `openssl-provider-legacy` package. Oracle's portable MySQL distribution may include its own OpenSSL tooling whose compiled provider path points at `/usr/local/mysql`; that OpenSSL must not be used for AzerothCore. v16 also isolates MySQL's private library directory from `authserver` and `worldserver` so Debian's legacy provider is loaded by the matching Debian `libcrypto`.
+The template deliberately uses Debian's `/usr/bin/openssl` and locates `legacy.so` from the `openssl-provider-legacy` package. Oracle's portable MySQL distribution may include its own OpenSSL tooling whose compiled provider path points at `/usr/local/mysql`; that OpenSSL must not be used for AzerothCore. v17 also isolates MySQL's private library directory from `authserver` and `worldserver` so Debian's legacy provider is loaded by the matching Debian `libcrypto`.
 
 ### Authentication database bootstrap repair
 
-Template v16 verifies the authentication base schema before starting `authserver`. AzerothCore only auto-populates a base database when `SHOW TABLES` returns zero rows. Earlier template revisions used the appearance of `realmlist` as a readiness signal and could stop the first bootstrap while later alphabetically sorted base files (notably `uptime.sql`) were still pending. That leaves a non-empty but incomplete database that AzerothCore will not automatically repopulate.
+Template v17 verifies the authentication base schema before starting `authserver`. AzerothCore only auto-populates a base database when `SHOW TABLES` returns zero rows. Earlier template revisions used the appearance of `realmlist` as a readiness signal and could stop the first bootstrap while later alphabetically sorted base files (notably `uptime.sql`) were still pending. That leaves a non-empty but incomplete database that AzerothCore will not automatically repopulate.
 
-v16 checks each same-named table SQL file in `source/data/sql/base/db_auth`, imports only missing base tables, verifies the set again, writes the realm row, starts `authserver` once, and waits for the authentication TCP port to be listening. The listener is created only after AzerothCore finishes database load/update/prepared-statement validation and realm initialization. This automatically repairs instances affected by the earlier race without deleting accounts or characters.
+v17 checks each same-named table SQL file in `source/data/sql/base/db_auth`, imports only missing base tables, verifies the set again, writes the realm row, starts `authserver` once, and waits for the authentication TCP port to be listening. The listener is created only after AzerothCore finishes database load/update/prepared-statement validation and realm initialization. This automatically repairs instances affected by the earlier race without deleting accounts or characters.

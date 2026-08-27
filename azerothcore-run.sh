@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-LAUNCHER_TEMPLATE_VERSION="16"
+LAUNCHER_TEMPLATE_VERSION="17"
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 027
@@ -152,7 +152,18 @@ MYSQL_SOCKET="$MYSQL_RUN_DIR/mysqld.sock"
 MYSQL_PID_FILE="$MYSQL_RUN_DIR/mysqld.pid"
 STATE_DIR="$BASE_DIR/state"
 OPENSSL_CONF_FILE="$STATE_DIR/openssl-azerothcore.cnf"
-READY_MARKER="$BASE_DIR/run/worldserver.ready"
+RUN_DIR="$BASE_DIR/run"
+READY_MARKER="$RUN_DIR/worldserver.ready"
+AUTH_PID_FILE="$RUN_DIR/authserver.pid"
+WORLD_PID_FILE="$RUN_DIR/worldserver.pid"
+READY_PID_FILE="$RUN_DIR/readiness-monitor.pid"
+METRICS_PID_FILE="$RUN_DIR/metrics-monitor.pid"
+MYSQL_SERVICE_PID_FILE="$RUN_DIR/mysql-service.pid"
+WATCHDOG_PID_FILE="$RUN_DIR/shutdown-watchdog.pid"
+LIFECYCLE_FILE="$RUN_DIR/lifecycle.id"
+CLEANUP_LOCK_FILE="$RUN_DIR/cleanup.lock"
+CLEANUP_COMPLETE_MARKER="$RUN_DIR/cleanup.complete"
+WATCHDOG_SCRIPT="$BASE_DIR/azerothcore-watchdog.sh"
 READY_STABILITY_SECONDS=10
 MYSQL_BUFFER_POOL_MB="$(numeric_or_default "${AMP_ACORE_MYSQL_BUFFER_POOL_MB:-1024}" 1024)"
 METRICS_INTERVAL_SECONDS="$(numeric_or_default "${AMP_ACORE_METRICS_INTERVAL_SECONDS:-60}" 60)"
@@ -174,15 +185,21 @@ REALM_LOCAL_SUBNET_MASK="${AMP_ACORE_REALM_LOCAL_SUBNET_MASK:-255.255.255.0}"
 MYSQL_ADMIN_USER="$(id -un)"
 DATABASE_USER="$MYSQL_ADMIN_USER"
 
-mkdir -p "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" "$BASE_DIR/logs" "$BASE_DIR/temp" "$BASE_DIR/run" "$STATE_DIR"
+mkdir -p "$MYSQL_RUN_DIR" "$MYSQL_LOG_DIR" "$BASE_DIR/logs" "$BASE_DIR/temp" "$RUN_DIR" "$STATE_DIR"
 chmod 700 "$MYSQL_RUN_DIR" 2>/dev/null || true
 LAUNCHER_LOG="$BASE_DIR/logs/amp-launcher.log"
 touch "$LAUNCHER_LOG" 2>/dev/null || true
-log "Launcher v$LAUNCHER_TEMPLATE_VERSION starting as user $MYSQL_ADMIN_USER (PID $$)"
+LIFECYCLE_ID="$(date -u +%s)-$$-${RANDOM:-0}-${RANDOM:-0}"
+printf '%s\n' "$LIFECYCLE_ID" > "$LIFECYCLE_FILE"
+rm -f "$CLEANUP_COMPLETE_MARKER" "$AUTH_PID_FILE" "$WORLD_PID_FILE" "$READY_PID_FILE" "$METRICS_PID_FILE" 2>/dev/null || true
+log "Launcher v$LAUNCHER_TEMPLATE_VERSION starting as user $MYSQL_ADMIN_USER (PID $$, lifecycle $LIFECYCLE_ID)"
 
 [[ -x "$BIN_DIR/authserver" ]] || fail "authserver is not installed; run Update first"
 [[ -x "$BIN_DIR/worldserver" ]] || fail "worldserver is not installed; run Update first"
 [[ -x "$MYSQL_DIR/bin/mysqld" ]] || fail "MySQL is not installed; run Update first"
+[[ -x "$WATCHDOG_SCRIPT" ]] || fail "AzerothCore shutdown watchdog is missing or not executable; run Update first"
+grep -Fq 'WATCHDOG_TEMPLATE_VERSION="17"' "$WATCHDOG_SCRIPT" \
+    || fail "AzerothCore shutdown watchdog version does not match launcher v$LAUNCHER_TEMPLATE_VERSION; run Update first"
 [[ -e "$MYSQL_COMPAT_DIR/libaio.so.1" ]] || fail "MySQL libaio compatibility is missing; run Update first"
 [[ -f "$ETC_DIR/authserver.conf" ]] || fail "authserver.conf is missing; run Update first"
 [[ -f "$ETC_DIR/worldserver.conf" ]] || fail "worldserver.conf is missing; run Update first"
@@ -547,6 +564,10 @@ start_mysql() {
     local timeout_count=180
     if mysql_ready; then
         log "Instance-local MySQL is already running"
+        if [[ -r "$MYSQL_PID_FILE" ]]; then
+            MYSQL_PID="$(tr -dc '0-9' < "$MYSQL_PID_FILE" 2>/dev/null || true)"
+            write_pid_record "$MYSQL_SERVICE_PID_FILE" "$MYSQL_PID"
+        fi
         return
     fi
     rm -f "$MYSQL_SOCKET" "$MYSQL_SOCKET.lock" "$MYSQL_PID_FILE"
@@ -554,6 +575,7 @@ start_mysql() {
     log "Starting instance-local MySQL"
     env LD_LIBRARY_PATH="$MYSQL_LD_LIBRARY_PATH" "$MYSQL_DIR/bin/mysqld" "${MYSQL_SERVER_ARGS[@]}" &
     MYSQL_PID=$!
+    write_pid_record "$MYSQL_SERVICE_PID_FILE" "$MYSQL_PID"
 
     while (( timeout_count-- > 0 )); do
         if mysql_ready; then
@@ -584,6 +606,7 @@ start_authserver() {
     env LD_LIBRARY_PATH="$ACORE_LD_LIBRARY_PATH" OPENSSL_CONF="$OPENSSL_CONF" OPENSSL_MODULES="$OPENSSL_MODULES" \
         "$BIN_DIR/authserver" -c "$ETC_DIR/authserver.conf" </dev/null &
     AUTH_PID=$!
+    write_pid_record "$AUTH_PID_FILE" "$AUTH_PID"
 }
 
 repair_auth_base_schema() {
@@ -843,6 +866,32 @@ start_metrics_monitor() {
         done
     ) &
     METRICS_PID=$!
+    write_pid_record "$METRICS_PID_FILE" "$METRICS_PID"
+}
+
+pid_starttime() {
+    local pid="$1"
+    [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/stat" ]] || return 1
+    awk '{print $22}' "/proc/$pid/stat" 2>/dev/null
+}
+
+write_pid_record() {
+    local file="$1" pid="$2" starttime
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+    starttime="$(pid_starttime "$pid" 2>/dev/null || true)"
+    [[ -n "$starttime" ]] || return 0
+    printf '%s\t%s\t%s\n' "$pid" "$starttime" "$LIFECYCLE_ID" > "$file"
+}
+
+read_pid_record() {
+    local file="$1"
+    RECORD_PID=""
+    RECORD_STARTTIME=""
+    RECORD_LIFECYCLE=""
+    [[ -r "$file" ]] || return 1
+    IFS=$'	 ' read -r RECORD_PID RECORD_STARTTIME RECORD_LIFECYCLE < "$file" || true
+    [[ "$RECORD_PID" =~ ^[0-9]+$ ]] || return 1
+    return 0
 }
 
 process_is_running() {
@@ -937,30 +986,138 @@ stop_pid_gracefully() {
     wait "$pid" 2>/dev/null || true
 }
 
+stop_mysql_service() {
+    local pid="${MYSQL_PID:-}" timeout_count
+    if [[ ! "$pid" =~ ^[0-9]+$ && -r "$MYSQL_PID_FILE" ]]; then
+        pid="$(tr -dc '0-9' < "$MYSQL_PID_FILE" 2>/dev/null || true)"
+    fi
+
+    if [[ ! "$pid" =~ ^[0-9]+$ ]] || ! process_is_running "$pid"; then
+        rm -f "$MYSQL_SERVICE_PID_FILE" "$MYSQL_PID_FILE" "$MYSQL_SOCKET" "$MYSQL_SOCKET.lock" 2>/dev/null || true
+        MYSQL_PID=""
+        return 0
+    fi
+
+    log "Stopping MySQL gracefully"
+    if [[ -S "$MYSQL_SOCKET" ]]; then
+        timeout --signal=TERM --kill-after=3s 30s \
+            env LD_LIBRARY_PATH="$MYSQL_LD_LIBRARY_PATH" \
+            "$MYSQL_DIR/bin/mysqladmin" --no-defaults --protocol=socket \
+            --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" shutdown \
+            >/dev/null 2>&1 || true
+    fi
+
+    timeout_count=10
+    while (( timeout_count-- > 0 )) && process_is_running "$pid"; do
+        sleep 1
+    done
+    if process_is_running "$pid"; then
+        log "MySQL did not finish its graceful shutdown; sending SIGTERM"
+        kill -TERM "$pid" 2>/dev/null || true
+        timeout_count=10
+        while (( timeout_count-- > 0 )) && process_is_running "$pid"; do
+            sleep 1
+        done
+    fi
+    if process_is_running "$pid"; then
+        log "MySQL is still running; sending SIGKILL"
+        kill -KILL "$pid" 2>/dev/null || true
+        timeout_count=5
+        while (( timeout_count-- > 0 )) && process_is_running "$pid"; do
+            sleep 1
+        done
+    fi
+
+    wait "$pid" 2>/dev/null || true
+    rm -f "$MYSQL_SERVICE_PID_FILE" "$MYSQL_PID_FILE" "$MYSQL_SOCKET" "$MYSQL_SOCKET.lock" 2>/dev/null || true
+    MYSQL_PID=""
+    log "MySQL stopped"
+}
+
+start_shutdown_watchdog() {
+    local supervisor_start world_start timeout_count=50 watchdog_lifecycle=""
+    supervisor_start="$(pid_starttime $$ 2>/dev/null || true)"
+    world_start="$(pid_starttime "$WORLD_PID" 2>/dev/null || true)"
+    [[ -n "$supervisor_start" && -n "$world_start" ]] \
+        || fail "Could not record process start times for the shutdown watchdog"
+
+    rm -f "$WATCHDOG_PID_FILE" 2>/dev/null || true
+    setsid --fork "$WATCHDOG_SCRIPT" \
+        --base-dir "$BASE_DIR" \
+        --lifecycle-id "$LIFECYCLE_ID" \
+        --supervisor-pid "$$" \
+        --supervisor-starttime "$supervisor_start" \
+        --world-pid "$WORLD_PID" \
+        --world-starttime "$world_start" \
+        </dev/null
+
+    while (( timeout_count-- > 0 )); do
+        if [[ -r "$WATCHDOG_PID_FILE" ]]; then
+            read_pid_record "$WATCHDOG_PID_FILE" || true
+            watchdog_lifecycle="$RECORD_LIFECYCLE"
+            if [[ "$watchdog_lifecycle" == "$LIFECYCLE_ID" ]] && process_is_running "$RECORD_PID"; then
+                log "Detached shutdown watchdog armed (PID $RECORD_PID)"
+                return 0
+            fi
+        fi
+        sleep 0.1
+    done
+    fail "Shutdown watchdog failed to start"
+}
+
 cleanup() {
+    local cleanup_fd watchdog_pid="" timeout_count
     if [[ "$CLEANED_UP" == "true" ]]; then
         return
     fi
     CLEANED_UP="true"
     rm -f "$READY_MARKER" 2>/dev/null || true
 
+    exec {cleanup_fd}>"$CLEANUP_LOCK_FILE"
+    if ! flock -w 90 "$cleanup_fd"; then
+        log "Could not acquire the shutdown cleanup lock; detached watchdog will continue cleanup"
+        return
+    fi
+
+    if [[ -r "$CLEANUP_COMPLETE_MARKER" ]] \
+        && [[ "$(cat "$CLEANUP_COMPLETE_MARKER" 2>/dev/null || true)" == "$LIFECYCLE_ID" ]]; then
+        flock -u "$cleanup_fd" 2>/dev/null || true
+        eval "exec ${cleanup_fd}>&-"
+        log "Shutdown cleanup was already completed by the detached watchdog"
+        return
+    fi
+
     log "Finalizing shutdown: stopping background monitors, authserver, and MySQL"
     stop_pid_tree_gracefully "$READY_PID" "readiness monitor" 3
     READY_PID=""
+    rm -f "$READY_PID_FILE" 2>/dev/null || true
     stop_pid_tree_gracefully "$METRICS_PID" "metrics monitor" 3
     METRICS_PID=""
+    rm -f "$METRICS_PID_FILE" 2>/dev/null || true
     stop_pid_gracefully "$WORLD_PID" "worldserver" 60
+    rm -f "$WORLD_PID_FILE" 2>/dev/null || true
     stop_pid_gracefully "$AUTH_PID" "authserver" 30
     AUTH_PID=""
+    rm -f "$AUTH_PID_FILE" 2>/dev/null || true
+    stop_mysql_service
 
-    if mysql_ready; then
-        log "Stopping MySQL"
-        mysqladmin_cli --protocol=socket --socket="$MYSQL_SOCKET" --user="$MYSQL_ADMIN_USER" shutdown >/dev/null 2>&1 || true
+    printf '%s\n' "$LIFECYCLE_ID" > "$CLEANUP_COMPLETE_MARKER"
+    flock -u "$cleanup_fd" 2>/dev/null || true
+    eval "exec ${cleanup_fd}>&-"
+
+    # The detached watchdog is normally waiting for this completion marker. Give
+    # it a moment to exit; if it does not, stop only that matching helper.
+    if read_pid_record "$WATCHDOG_PID_FILE" && [[ "$RECORD_LIFECYCLE" == "$LIFECYCLE_ID" ]]; then
+        watchdog_pid="$RECORD_PID"
+        timeout_count=30
+        while (( timeout_count-- > 0 )) && process_is_running "$watchdog_pid"; do
+            sleep 0.1
+        done
+        if process_is_running "$watchdog_pid"; then
+            kill -TERM "$watchdog_pid" 2>/dev/null || true
+        fi
     fi
-    if [[ -n "$MYSQL_PID" ]]; then
-        wait "$MYSQL_PID" 2>/dev/null || true
-        MYSQL_PID=""
-    fi
+    rm -f "$WATCHDOG_PID_FILE" 2>/dev/null || true
     log "Shutdown complete"
 }
 
@@ -1001,6 +1158,7 @@ log "Starting worldserver (AMP console input is attached directly to worldserver
 env LD_LIBRARY_PATH="$ACORE_LD_LIBRARY_PATH" OPENSSL_CONF="$OPENSSL_CONF" OPENSSL_MODULES="$OPENSSL_MODULES" \
     "$BIN_DIR/worldserver" -c "$ETC_DIR/worldserver.conf" <&0 &
 WORLD_PID=$!
+write_pid_record "$WORLD_PID_FILE" "$WORLD_PID"
 
 (
     MONITOR_SLEEP_PID=""
@@ -1036,13 +1194,14 @@ WORLD_PID=$!
     exit 1
 ) &
 READY_PID=$!
+write_pid_record "$READY_PID_FILE" "$READY_PID"
 start_metrics_monitor
+start_shutdown_watchdog
 
 set +e
 wait "$WORLD_PID"
 WORLD_STATUS=$?
 set -e
-WORLD_PID=""
 
 log "worldserver exited with status $WORLD_STATUS"
 if (( WORLD_STATUS != 0 )); then
