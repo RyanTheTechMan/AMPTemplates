@@ -263,6 +263,10 @@ Common AMP settings include:
 - Maximum controlled bots
 - AddClass account pool
 - Random-bot account count
+- Random passwords for newly created randombot accounts
+- Random-bot level range, XP rate, real-player level synchronization, and Dungeon Finder participation
+- Active-alone population, roster rotation, and SmartScale thresholds
+- Quest synchronization, AoE avoidance, and ICC assistance
 - Altbot autologin
 - Account, guild, and trusted-account bot permissions
 - Random-bot processing interval
@@ -270,6 +274,8 @@ Common AMP settings include:
 - Bot invitations, chat, emotes, and broadcasts
 
 Start conservatively. Hundreds of active bots can substantially increase CPU load, memory use, startup time, and database activity.
+
+**Random Passwords For New Bot Accounts** is enabled by default. Without it, Playerbots creates each randombot account with its predictable account name as the password. The option affects only accounts created after it is enabled; it does not rewrite credentials for existing bot accounts. Existing accounts must be deliberately recreated or have their passwords changed through AzerothCore administration if they need remediation. The template does not expose the destructive bot-account deletion switch.
 
 The upstream Playerbots documentation is available at:
 
@@ -307,7 +313,8 @@ The template exposes more than just launch arguments. Depending on the selected 
 - Realm type and population limit
 - MOTD and login information
 - XP, money, item-drop, reputation, honor, and arena rates
-- Starting level/money and cinematics
+- Starting normal/heroic levels, character slots, heroic unlock requirements, money, and cinematics
+- Flight-path, profession, skill, dual-specialization, AFK, and repair-cost behavior
 - Creature health/damage scaling
 - Instance restrictions
 - Cross-faction features
@@ -321,6 +328,8 @@ The template exposes more than just launch arguments. Depending on the selected 
 - Playerbots behavior
 
 The full upstream files remain available in the instance under the installed configuration directory for settings that are not represented in AMP.
+
+**Player Save Interval** is shown in seconds in AMP. The launcher converts it to the milliseconds required by `PlayerSaveInterval`; the default `900` seconds is written as `900000` milliseconds. **Additional Character Saves** uses the current AzerothCore bitmask: `1` saves inventory and gold after notable loot, `2` saves quest status, and `4` saves achievements.
 
 ## 14. Important instance paths
 
@@ -373,9 +382,9 @@ For a live server, stop the instance before taking a raw filesystem copy of the 
 
 The AMP template downloads `azerothcore-install.sh`, `azerothcore-run.sh`, and `azerothcore-watchdog.sh` from the Git repository/ref selected by **Template Repository Ref**. The KVP/JSON template and those runtime scripts must come from the same revision.
 
-Template v17 passes its expected version to the downloaded installer and requires both the downloaded launcher and shutdown watchdog to declare the same version. A stale branch now fails immediately with a clear `Template/runtime version mismatch` message, before MySQL or client data is downloaded. The script URLs also include a version-specific cache-busting query parameter.
+Template v18 passes its expected version to the downloaded installer and requires both the downloaded launcher and shutdown watchdog to declare the same version. A stale branch now fails immediately with a clear `Template/runtime version mismatch` message, before MySQL or client data is downloaded. The script URLs also include a version-specific cache-busting query parameter.
 
-For the normal repository setup, keep **Template Repository Ref** set to `main` and make sure `main` contains the same v17 files as the imported template.
+For the normal repository setup, keep **Template Repository Ref** set to `main` and make sure `main` contains the same v18 files as the imported template.
 
 
 ## 17. Troubleshooting

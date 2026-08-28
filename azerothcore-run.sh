@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-LAUNCHER_TEMPLATE_VERSION="17"
+LAUNCHER_TEMPLATE_VERSION="18"
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 027
@@ -198,7 +198,7 @@ log "Launcher v$LAUNCHER_TEMPLATE_VERSION starting as user $MYSQL_ADMIN_USER (PI
 [[ -x "$BIN_DIR/worldserver" ]] || fail "worldserver is not installed; run Update first"
 [[ -x "$MYSQL_DIR/bin/mysqld" ]] || fail "MySQL is not installed; run Update first"
 [[ -x "$WATCHDOG_SCRIPT" ]] || fail "AzerothCore shutdown watchdog is missing or not executable; run Update first"
-grep -Fq 'WATCHDOG_TEMPLATE_VERSION="17"' "$WATCHDOG_SCRIPT" \
+grep -Fq 'WATCHDOG_TEMPLATE_VERSION="18"' "$WATCHDOG_SCRIPT" \
     || fail "AzerothCore shutdown watchdog version does not match launcher v$LAUNCHER_TEMPLATE_VERSION; run Update first"
 [[ -e "$MYSQL_COMPAT_DIR/libaio.so.1" ]] || fail "MySQL libaio compatibility is missing; run Update first"
 [[ -f "$ETC_DIR/authserver.conf" ]] || fail "authserver.conf is missing; run Update first"
@@ -351,13 +351,36 @@ EOF
 
 configure_server_files() {
     local database_auth database_world database_characters database_playerbots playerbots_config
-    local start_money_gold start_money_copper cross_faction_value chat_feed_value
+    local start_money_gold start_money_copper player_save_interval_seconds player_save_interval_milliseconds
+    local characters_per_realm heroic_characters_per_realm cross_faction_value chat_feed_value
+    local playerbots_min_random_bots playerbots_max_random_bots playerbots_min_level playerbots_max_level
+    local playerbots_active_floor_ms playerbots_active_ceiling_ms playerbots_values_validated
     database_auth=".;$MYSQL_SOCKET;$DATABASE_USER;;acore_auth"
     database_world=".;$MYSQL_SOCKET;$DATABASE_USER;;acore_world"
     database_characters=".;$MYSQL_SOCKET;$DATABASE_USER;;acore_characters"
     database_playerbots=".;$MYSQL_SOCKET;$DATABASE_USER;;acore_playerbots"
     start_money_gold="$(numeric_or_default "${AMP_ACORE_START_PLAYER_MONEY_GOLD:-0}" 0)"
     start_money_copper=$((start_money_gold * 10000))
+    # AMP exposes this setting in seconds, while AzerothCore's PlayerSaveInterval
+    # configuration value is measured in milliseconds. Current AzerothCore gives
+    # AC_* environment variables precedence over worldserver.conf, so consume the
+    # legacy variable only as an input and remove it before starting the servers.
+    player_save_interval_seconds="$(numeric_or_default "${AMP_ACORE_PLAYER_SAVE_INTERVAL_SECONDS:-${AC_PLAYER_SAVE_INTERVAL:-900}}" 900)"
+    player_save_interval_milliseconds=$((player_save_interval_seconds * 1000))
+    unset AC_PLAYER_SAVE_INTERVAL
+    characters_per_realm="$(numeric_or_default "${AMP_ACORE_CHARACTERS_PER_REALM:-10}" 10)"
+    heroic_characters_per_realm="$(numeric_or_default "${AMP_ACORE_HEROIC_CHARACTERS_PER_REALM:-1}" 1)"
+    (( heroic_characters_per_realm <= characters_per_realm )) \
+        || fail "Heroic Characters Per Realm cannot exceed Characters Per Realm"
+    playerbots_min_random_bots="$(numeric_or_default "${AC_AI_PLAYERBOT_MIN_RANDOM_BOTS:-100}" 100)"
+    playerbots_max_random_bots="$(numeric_or_default "${AC_AI_PLAYERBOT_MAX_RANDOM_BOTS:-100}" 100)"
+    AC_AI_PLAYERBOT_MIN_RANDOM_BOTS="$playerbots_min_random_bots"
+    AC_AI_PLAYERBOT_MAX_RANDOM_BOTS="$playerbots_max_random_bots"
+    playerbots_min_level="$(numeric_or_default "${AMP_ACORE_PLAYERBOTS_RANDOM_BOT_MIN_LEVEL:-1}" 1)"
+    playerbots_max_level="$(numeric_or_default "${AMP_ACORE_PLAYERBOTS_RANDOM_BOT_MAX_LEVEL:-80}" 80)"
+    playerbots_active_floor_ms="$(numeric_or_default "${AMP_ACORE_PLAYERBOTS_SMART_SCALE_FLOOR_MS:-50}" 50)"
+    playerbots_active_ceiling_ms="$(numeric_or_default "${AMP_ACORE_PLAYERBOTS_SMART_SCALE_CEILING_MS:-200}" 200)"
+    playerbots_values_validated=0
     cross_faction_value="$(boolean_number "${AMP_ACORE_ALLOW_CROSS_FACTION_INTERACTION:-0}")"
     chat_feed_value="$(boolean_number "${AMP_ACORE_ENABLE_CHAT_FEED:-0}")"
 
@@ -398,6 +421,17 @@ configure_server_files() {
     set_conf_value "$ETC_DIR/worldserver.conf" "Motd" "$(config_string "${AC_MOTD:-Welcome to an AzerothCore server powered by AMP!}")"
     set_conf_value "$ETC_DIR/worldserver.conf" "GameType" "${AC_GAME_TYPE:-0}"
     set_conf_value "$ETC_DIR/worldserver.conf" "StartPlayerLevel" "${AC_START_PLAYER_LEVEL:-1}"
+    set_conf_value_if_present "$ETC_DIR/worldserver.conf" "CharactersPerRealm" "$characters_per_realm"
+    set_conf_value_if_present "$ETC_DIR/worldserver.conf" "HeroicCharactersPerRealm" "$heroic_characters_per_realm"
+    set_conf_value_if_present "$ETC_DIR/worldserver.conf" "CharacterCreating.MinLevelForHeroicCharacter" "${AMP_ACORE_HEROIC_CHARACTER_UNLOCK_LEVEL:-55}"
+    set_conf_value_if_present "$ETC_DIR/worldserver.conf" "StartHeroicPlayerLevel" "${AMP_ACORE_START_HEROIC_PLAYER_LEVEL:-55}"
+    set_conf_value_if_present "$ETC_DIR/worldserver.conf" "MinDualSpecLevel" "${AMP_ACORE_MIN_DUAL_SPEC_LEVEL:-40}"
+    set_conf_value_if_present "$ETC_DIR/worldserver.conf" "MaxPrimaryTradeSkill" "${AMP_ACORE_MAX_PRIMARY_TRADE_SKILL:-2}"
+    set_conf_value_if_present "$ETC_DIR/worldserver.conf" "PreventAFKLogout" "${AMP_ACORE_PREVENT_AFK_LOGOUT:-0}"
+    set_conf_value_if_present "$ETC_DIR/worldserver.conf" "AllFlightPaths" "$(boolean_number "${AMP_ACORE_ALL_FLIGHT_PATHS:-0}")"
+    set_conf_value_if_present "$ETC_DIR/worldserver.conf" "InstantFlightPaths" "${AMP_ACORE_INSTANT_FLIGHT_PATHS:-0}"
+    set_conf_value_if_present "$ETC_DIR/worldserver.conf" "AlwaysMaxSkillForLevel" "$(boolean_number "${AMP_ACORE_ALWAYS_MAX_SKILL_FOR_LEVEL:-0}")"
+    set_conf_value_if_present "$ETC_DIR/worldserver.conf" "AlwaysMaxWeaponSkill" "$(boolean_number "${AMP_ACORE_ALWAYS_MAX_WEAPON_SKILL:-0}")"
     set_conf_value_if_present "$ETC_DIR/worldserver.conf" "StartPlayerMoney" "$start_money_copper"
     set_conf_value_if_present "$ETC_DIR/worldserver.conf" "SkipCinematics" "${AC_SKIP_CINEMATICS:-0}"
     set_conf_value_if_present "$ETC_DIR/worldserver.conf" "PlayerStart.String" "$(config_string "${AC_PLAYER_START_STRING:-}")"
@@ -419,6 +453,7 @@ configure_server_files() {
     set_conf_value_if_present "$ETC_DIR/worldserver.conf" "Rate.ArenaPoints" "${AC_RATE_ARENA_POINTS:-1}"
     set_conf_value_if_present "$ETC_DIR/worldserver.conf" "Rate.RewardQuestMoney" "${AC_RATE_REWARD_QUEST_MONEY:-1}"
     set_conf_value_if_present "$ETC_DIR/worldserver.conf" "Rate.RewardBonusMoney" "${AC_RATE_REWARD_BONUS_MONEY:-1}"
+    set_conf_value_if_present "$ETC_DIR/worldserver.conf" "Rate.RepairCost" "${AMP_ACORE_RATE_REPAIR_COST:-1}"
 
     local creature_rank
     for creature_rank in Normal Elite.RAREELITE Elite.Elite Elite.WORLDBOSS Elite.RARE; do
@@ -436,7 +471,7 @@ configure_server_files() {
     for interaction_key in Chat Channel Group Guild Arena Auction; do
         set_conf_value_if_present "$ETC_DIR/worldserver.conf" "AllowTwoSide.Interaction.$interaction_key" "$cross_faction_value"
     done
-    set_conf_value_if_present "$ETC_DIR/worldserver.conf" "PlayerSaveInterval" "${AC_PLAYER_SAVE_INTERVAL:-900}"
+    set_conf_value_if_present "$ETC_DIR/worldserver.conf" "PlayerSaveInterval" "$player_save_interval_milliseconds"
     set_conf_value_if_present "$ETC_DIR/worldserver.conf" "PlayerSave.AdditionalSaves" "${AC_PLAYER_SAVE_ADDITIONAL_SAVES:-0}"
     set_conf_value_if_present "$ETC_DIR/worldserver.conf" "Warden.Enabled" "$(boolean_number "${AC_WARDEN_ENABLED:-1}")"
     set_conf_value_if_present "$ETC_DIR/worldserver.conf" "Network.EnableProxyProtocol" "$(boolean_number "${AMP_ACORE_ENABLE_PROXY_PROTOCOL:-0}")"
@@ -470,11 +505,20 @@ configure_server_files() {
         "$ETC_DIR/modules/mod-playerbots.conf" \
         "$ETC_DIR/mod-playerbots.conf"; do
         [[ -f "$playerbots_config" ]] || continue
+        if (( playerbots_values_validated == 0 )); then
+            (( playerbots_min_random_bots <= playerbots_max_random_bots )) \
+                || fail "Minimum Random Bots cannot exceed Maximum Random Bots"
+            (( playerbots_min_level <= playerbots_max_level )) \
+                || fail "Random Bot Minimum Level cannot exceed Random Bot Maximum Level"
+            (( playerbots_active_floor_ms < playerbots_active_ceiling_ms )) \
+                || fail "Playerbots SmartScale floor must be lower than its ceiling"
+            playerbots_values_validated=1
+        fi
         set_conf_value "$playerbots_config" "PlayerbotsDatabaseInfo" "$(config_string "$database_playerbots")"
         set_conf_value "$playerbots_config" "AiPlayerbot.Enabled" "${AC_AI_PLAYERBOT_ENABLED:-1}"
         set_conf_value "$playerbots_config" "AiPlayerbot.RandomBotAutologin" "${AC_AI_PLAYERBOT_RANDOM_BOT_AUTOLOGIN:-1}"
-        set_conf_value "$playerbots_config" "AiPlayerbot.MinRandomBots" "${AC_AI_PLAYERBOT_MIN_RANDOM_BOTS:-100}"
-        set_conf_value "$playerbots_config" "AiPlayerbot.MaxRandomBots" "${AC_AI_PLAYERBOT_MAX_RANDOM_BOTS:-100}"
+        set_conf_value "$playerbots_config" "AiPlayerbot.MinRandomBots" "$playerbots_min_random_bots"
+        set_conf_value "$playerbots_config" "AiPlayerbot.MaxRandomBots" "$playerbots_max_random_bots"
         set_conf_value "$playerbots_config" "AiPlayerbot.DisabledWithoutRealPlayer" "${AC_AI_PLAYERBOT_DISABLED_WITHOUT_REAL_PLAYER:-0}"
         set_conf_value_if_present "$playerbots_config" "AiPlayerbot.DisabledWithoutRealPlayerLoginDelay" "${AC_AI_PLAYERBOT_DISABLED_WITHOUT_REAL_PLAYER_LOGIN_DELAY:-30}"
         set_conf_value_if_present "$playerbots_config" "AiPlayerbot.DisabledWithoutRealPlayerLogoutDelay" "${AC_AI_PLAYERBOT_DISABLED_WITHOUT_REAL_PLAYER_LOGOUT_DELAY:-300}"
@@ -495,6 +539,21 @@ configure_server_files() {
         set_conf_value_if_present "$playerbots_config" "AiPlayerbot.RandomBotTalk" "${AC_AI_PLAYERBOT_RANDOM_BOT_TALK:-1}"
         set_conf_value_if_present "$playerbots_config" "AiPlayerbot.RandomBotEmote" "${AC_AI_PLAYERBOT_RANDOM_BOT_EMOTE:-0}"
         set_conf_value_if_present "$playerbots_config" "AiPlayerbot.EnableBroadcasts" "${AC_AI_PLAYERBOT_ENABLE_BROADCASTS:-1}"
+        set_conf_value_if_present "$playerbots_config" "AiPlayerbot.RandomBotRandomPassword" "$(boolean_number "${AMP_ACORE_PLAYERBOTS_RANDOM_PASSWORDS:-1}")"
+        set_conf_value_if_present "$playerbots_config" "AiPlayerbot.RandomBotMinLevel" "$playerbots_min_level"
+        set_conf_value_if_present "$playerbots_config" "AiPlayerbot.RandomBotMaxLevel" "$playerbots_max_level"
+        set_conf_value_if_present "$playerbots_config" "AiPlayerbot.RandomBotXPRate" "${AMP_ACORE_PLAYERBOTS_RANDOM_BOT_XP_RATE:-1}"
+        set_conf_value_if_present "$playerbots_config" "AiPlayerbot.SyncLevelWithPlayers" "$(boolean_number "${AMP_ACORE_PLAYERBOTS_SYNC_LEVEL_WITH_PLAYERS:-0}")"
+        set_conf_value_if_present "$playerbots_config" "AiPlayerbot.RandomBotJoinLfg" "$(boolean_number "${AMP_ACORE_PLAYERBOTS_RANDOM_BOT_JOIN_LFG:-1}")"
+        set_conf_value_if_present "$playerbots_config" "AiPlayerbot.BotActiveAlone" "${AMP_ACORE_PLAYERBOTS_ACTIVE_ALONE_PERCENT:-10}"
+        set_conf_value_if_present "$playerbots_config" "AiPlayerbot.BotActiveAloneDurationSeconds" "${AMP_ACORE_PLAYERBOTS_ACTIVE_ALONE_ROTATION_SECONDS:-30}"
+        set_conf_value_if_present "$playerbots_config" "AiPlayerbot.botActiveAloneSmartScale" "$(boolean_number "${AMP_ACORE_PLAYERBOTS_SMART_SCALE:-1}")"
+        set_conf_value_if_present "$playerbots_config" "AiPlayerbot.botActiveAloneSmartScaleDiffLimitfloor" "$playerbots_active_floor_ms"
+        set_conf_value_if_present "$playerbots_config" "AiPlayerbot.botActiveAloneSmartScaleDiffLimitCeiling" "$playerbots_active_ceiling_ms"
+        set_conf_value_if_present "$playerbots_config" "AiPlayerbot.AutoAvoidAoe" "$(boolean_number "${AMP_ACORE_PLAYERBOTS_AUTO_AVOID_AOE:-1}")"
+        set_conf_value_if_present "$playerbots_config" "AiPlayerbot.SyncQuestWithPlayer" "$(boolean_number "${AMP_ACORE_PLAYERBOTS_SYNC_QUEST_WITH_PLAYER:-1}")"
+        set_conf_value_if_present "$playerbots_config" "AiPlayerbot.SyncQuestForPlayer" "$(boolean_number "${AMP_ACORE_PLAYERBOTS_SYNC_QUEST_FOR_PLAYER:-0}")"
+        set_conf_value_if_present "$playerbots_config" "AiPlayerbot.EnableICCBuffs" "$(boolean_number "${AMP_ACORE_PLAYERBOTS_ENABLE_ICC_BUFFS:-1}")"
         set_conf_value "$playerbots_config" "AiPlayerbot.CommandServerPort" "0"
     done
 }
