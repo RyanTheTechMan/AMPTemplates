@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-WATCHDOG_TEMPLATE_VERSION="19"
+WATCHDOG_TEMPLATE_VERSION="20"
 set -u
 IFS=$'\n\t'
 umask 027

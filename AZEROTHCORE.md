@@ -308,7 +308,7 @@ Again, do **not** add `mod-playerbots` this way; choose a Playerbots distributio
 
 ### Managed module companion services
 
-Some compiled modules also need a long-running bridge or worker. Template v19 keeps these helpers under the same launcher-owned lifecycle as MySQL, `authserver`, and `worldserver`. The installer detects supported services from the resolved `state/module-records` metadata, prepares them during **Update**, and writes only the enabled service IDs to `state/companion-services`. Normal **Start** never installs Python packages.
+Some compiled modules also need a long-running bridge or worker. Template v19 introduced support for keeping these helpers under the same launcher-owned lifecycle as MySQL, `authserver`, and `worldserver`. The installer detects supported services from the resolved `state/module-records` metadata, prepares them during **Update**, and writes only the enabled service IDs to `state/companion-services`. Normal **Start** never installs Python packages.
 
 The first adapter supports `Hokken/mod-llm-chatter@master`. It:
 
@@ -429,9 +429,9 @@ For a live server, stop the instance before taking a raw filesystem copy of the 
 
 The AMP template downloads `azerothcore-install.sh`, `azerothcore-run.sh`, `azerothcore-watchdog.sh`, and `azerothcore-companions.sh` from the Git repository/ref selected by **Template Repository Ref**. The KVP/JSON template and those runtime scripts must come from the same revision.
 
-Template v19 passes its expected version to the downloaded installer and requires the launcher, shutdown watchdog, and companion library to declare the same version. A stale branch fails immediately with a clear `Template/runtime version mismatch` message, before MySQL or client data is downloaded. The script URLs also include a version-specific cache-busting query parameter.
+Template v20 passes its expected version to the downloaded installer and requires the launcher, shutdown watchdog, and companion library to declare the same version. A stale branch fails immediately with a clear `Template/runtime version mismatch` message, before MySQL or client data is downloaded. The script URLs also include a version-specific cache-busting query parameter.
 
-For the normal repository setup, keep **Template Repository Ref** set to `main` and make sure `main` contains the same v19 files as the imported template.
+For the normal repository setup, keep **Template Repository Ref** set to `main` and make sure `main` contains the same v20 files as the imported template.
 
 
 ## 17. Troubleshooting
@@ -474,9 +474,9 @@ verify that the instance is using `cubecoders/ampbase:debian`, fetch the current
 
 Debian 13 packages the OpenSSL legacy provider separately as `openssl-provider-legacy`. The AMP template installs that package because WoW 3.3.5a uses RC4; startup verifies `legacy.so` and refuses to launch if the container has not been refreshed with the required provider.
 
-AMP deliberately monitors the Bash launcher, not `worldserver`. Do not set `App.MonitorChildProcessName=worldserver`: doing so ends AMP's supervisor ownership too early and can orphan `authserver`, companion services, or MySQL. The detached `azerothcore-watchdog.sh` remains a last-resort lifecycle owner if AMP force-kills the launcher; it stops the complete process stack in bounded stages.
+AMP monitors the direct `worldserver` child so its CPU and RAM meters represent the game server instead of the mostly idle Bash launcher. The detached `azerothcore-watchdog.sh` preserves full-stack lifecycle ownership if AMP tears down the launcher when `worldserver` exits: it stops readiness and metrics helpers, companion services, `authserver`, and MySQL in bounded stages.
 
-If a current v19 instance still exits during startup, inspect both the application console and:
+If a current v20 instance still exits during startup, inspect both the application console and:
 
 ```text
 logs/amp-launcher.log
@@ -639,7 +639,7 @@ A new instance can spend several minutes importing the Character, World, and Pla
 
 AMP sends `server shutdown 1` to `worldserver` and waits for the long-lived launcher to finish. A Playerbots server may remain in **Stopping** while AzerothCore logs out every online bot, drains pending character-database writes, closes the World/Character/Auth/Playerbots pools, then lets the launcher stop `authserver` and MySQL. This is an orderly data-preserving shutdown rather than a hang; `worldserver exited with status 0` indicates success.
 
-Template v19 retains the independent shutdown watchdog. If AMP force-kills the launcher, the watchdog stops readiness/metrics helpers, `worldserver`, every recorded companion process tree, `authserver`, and MySQL instead of leaving them reparented under the container's `tini` process. Companion and server stops use bounded TERM-to-KILL escalation; MySQL first receives a bounded `mysqladmin shutdown`, then TERM and KILL if required. Time spent *before* `worldserver exited with status 0` can still be genuine Playerbots logout/database-flush work.
+Template v20 retains the independent shutdown watchdog. If AMP force-kills the launcher, the watchdog stops readiness/metrics helpers, `worldserver`, every recorded companion process tree, `authserver`, and MySQL instead of leaving them reparented under the container's `tini` process. Companion and server stops use bounded TERM-to-KILL escalation; MySQL first receives a bounded `mysqladmin shutdown`, then TERM and KILL if required. Time spent *before* `worldserver exited with status 0` can still be genuine Playerbots logout/database-flush work.
 
 A normal companion-enabled stop should read approximately:
 

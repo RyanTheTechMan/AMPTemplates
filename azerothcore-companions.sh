@@ -3,7 +3,7 @@
 # launcher. Keep this small: lifecycle policy stays in azerothcore-run.sh and
 # azerothcore-watchdog.sh; this file only supplies discovery, preparation, and
 # adapter definitions.
-COMPANION_LIBRARY_VERSION="19"
+COMPANION_LIBRARY_VERSION="20"
 LLM_CHATTER_SOCKET_PATCH_VERSION="1"
 
 COMPANION_KNOWN_ADAPTERS=("llm-chatter")

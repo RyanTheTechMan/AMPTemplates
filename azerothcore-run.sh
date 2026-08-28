@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-LAUNCHER_TEMPLATE_VERSION="19"
+LAUNCHER_TEMPLATE_VERSION="20"
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 027
@@ -200,10 +200,10 @@ log "Launcher v$LAUNCHER_TEMPLATE_VERSION starting as user $MYSQL_ADMIN_USER (PI
 [[ -x "$BIN_DIR/worldserver" ]] || fail "worldserver is not installed; run Update first"
 [[ -x "$MYSQL_DIR/bin/mysqld" ]] || fail "MySQL is not installed; run Update first"
 [[ -x "$WATCHDOG_SCRIPT" ]] || fail "AzerothCore shutdown watchdog is missing or not executable; run Update first"
-grep -Fq 'WATCHDOG_TEMPLATE_VERSION="19"' "$WATCHDOG_SCRIPT" \
+grep -Fq 'WATCHDOG_TEMPLATE_VERSION="20"' "$WATCHDOG_SCRIPT" \
     || fail "AzerothCore shutdown watchdog version does not match launcher v$LAUNCHER_TEMPLATE_VERSION; run Update first"
 [[ -r "$COMPANION_LIBRARY" ]] || fail "Managed companion service library is missing; run Update first"
-grep -Fq 'COMPANION_LIBRARY_VERSION="19"' "$COMPANION_LIBRARY" \
+grep -Fq 'COMPANION_LIBRARY_VERSION="20"' "$COMPANION_LIBRARY" \
     || fail "Managed companion service library does not match launcher v$LAUNCHER_TEMPLATE_VERSION; run Update first"
 # shellcheck source=azerothcore-companions.sh
 source "$COMPANION_LIBRARY"

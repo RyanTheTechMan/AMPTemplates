@@ -39,7 +39,7 @@ CLIENT_DATA_VERSION="v20.0"
 MYSQL_RELEASE="8.4"
 CUSTOM_MYSQL_VERSION=""
 MYSQL_BUFFER_POOL_MB="1024"
-INSTALLER_TEMPLATE_VERSION="19"
+INSTALLER_TEMPLATE_VERSION="20"
 EXPECTED_TEMPLATE_VERSION=""
 
 while (($#)); do
@@ -75,18 +75,18 @@ log "Installer v$INSTALLER_TEMPLATE_VERSION starting"
 
 [[ -f "$BASE_DIR/azerothcore-run.sh" ]] \
     || fail "The AzerothCore launcher was not downloaded before the installer"
-if ! grep -Fq 'LAUNCHER_TEMPLATE_VERSION="19"' "$BASE_DIR/azerothcore-run.sh"; then
-    fail "Template/runtime version mismatch: installer v$INSTALLER_TEMPLATE_VERSION did not receive launcher v19. Update the configured template repository/ref before retrying."
+if ! grep -Fq 'LAUNCHER_TEMPLATE_VERSION="20"' "$BASE_DIR/azerothcore-run.sh"; then
+    fail "Template/runtime version mismatch: installer v$INSTALLER_TEMPLATE_VERSION did not receive launcher v20. Update the configured template repository/ref before retrying."
 fi
 [[ -f "$BASE_DIR/azerothcore-watchdog.sh" ]] \
     || fail "The AzerothCore shutdown watchdog was not downloaded before the installer"
-if ! grep -Fq 'WATCHDOG_TEMPLATE_VERSION="19"' "$BASE_DIR/azerothcore-watchdog.sh"; then
-    fail "Template/runtime version mismatch: installer v$INSTALLER_TEMPLATE_VERSION did not receive shutdown watchdog v19. Update the configured template repository/ref before retrying."
+if ! grep -Fq 'WATCHDOG_TEMPLATE_VERSION="20"' "$BASE_DIR/azerothcore-watchdog.sh"; then
+    fail "Template/runtime version mismatch: installer v$INSTALLER_TEMPLATE_VERSION did not receive shutdown watchdog v20. Update the configured template repository/ref before retrying."
 fi
 [[ -f "$BASE_DIR/azerothcore-companions.sh" ]] \
     || fail "The managed companion service library was not downloaded before the installer"
-if ! grep -Fq 'COMPANION_LIBRARY_VERSION="19"' "$BASE_DIR/azerothcore-companions.sh"; then
-    fail "Template/runtime version mismatch: installer v$INSTALLER_TEMPLATE_VERSION did not receive companion library v19. Update the configured template repository/ref before retrying."
+if ! grep -Fq 'COMPANION_LIBRARY_VERSION="20"' "$BASE_DIR/azerothcore-companions.sh"; then
+    fail "Template/runtime version mismatch: installer v$INSTALLER_TEMPLATE_VERSION did not receive companion library v20. Update the configured template repository/ref before retrying."
 fi
 
 case "$BUILD_TYPE" in
