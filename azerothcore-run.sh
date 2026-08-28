@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-LAUNCHER_TEMPLATE_VERSION="18"
+LAUNCHER_TEMPLATE_VERSION="19"
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 027
@@ -139,6 +139,7 @@ set_conf_value_if_present() {
 }
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SOURCE_DIR="$BASE_DIR/source"
 DIST_DIR="$BASE_DIR/dist"
 BIN_DIR="$DIST_DIR/bin"
 ETC_DIR="$DIST_DIR/etc"
@@ -164,6 +165,7 @@ LIFECYCLE_FILE="$RUN_DIR/lifecycle.id"
 CLEANUP_LOCK_FILE="$RUN_DIR/cleanup.lock"
 CLEANUP_COMPLETE_MARKER="$RUN_DIR/cleanup.complete"
 WATCHDOG_SCRIPT="$BASE_DIR/azerothcore-watchdog.sh"
+COMPANION_LIBRARY="$BASE_DIR/azerothcore-companions.sh"
 READY_STABILITY_SECONDS=10
 MYSQL_BUFFER_POOL_MB="$(numeric_or_default "${AMP_ACORE_MYSQL_BUFFER_POOL_MB:-1024}" 1024)"
 METRICS_INTERVAL_SECONDS="$(numeric_or_default "${AMP_ACORE_METRICS_INTERVAL_SECONDS:-60}" 60)"
@@ -198,8 +200,16 @@ log "Launcher v$LAUNCHER_TEMPLATE_VERSION starting as user $MYSQL_ADMIN_USER (PI
 [[ -x "$BIN_DIR/worldserver" ]] || fail "worldserver is not installed; run Update first"
 [[ -x "$MYSQL_DIR/bin/mysqld" ]] || fail "MySQL is not installed; run Update first"
 [[ -x "$WATCHDOG_SCRIPT" ]] || fail "AzerothCore shutdown watchdog is missing or not executable; run Update first"
-grep -Fq 'WATCHDOG_TEMPLATE_VERSION="18"' "$WATCHDOG_SCRIPT" \
+grep -Fq 'WATCHDOG_TEMPLATE_VERSION="19"' "$WATCHDOG_SCRIPT" \
     || fail "AzerothCore shutdown watchdog version does not match launcher v$LAUNCHER_TEMPLATE_VERSION; run Update first"
+[[ -r "$COMPANION_LIBRARY" ]] || fail "Managed companion service library is missing; run Update first"
+grep -Fq 'COMPANION_LIBRARY_VERSION="19"' "$COMPANION_LIBRARY" \
+    || fail "Managed companion service library does not match launcher v$LAUNCHER_TEMPLATE_VERSION; run Update first"
+# shellcheck source=azerothcore-companions.sh
+source "$COMPANION_LIBRARY"
+[[ "$COMPANION_LIBRARY_VERSION" == "$LAUNCHER_TEMPLATE_VERSION" ]] \
+    || fail "Template/runtime version mismatch between launcher and companion library"
+companion_runtime_initialize
 [[ -e "$MYSQL_COMPAT_DIR/libaio.so.1" ]] || fail "MySQL libaio compatibility is missing; run Update first"
 [[ -f "$ETC_DIR/authserver.conf" ]] || fail "authserver.conf is missing; run Update first"
 [[ -f "$ETC_DIR/worldserver.conf" ]] || fail "worldserver.conf is missing; run Update first"
@@ -1146,7 +1156,7 @@ cleanup() {
         return
     fi
 
-    log "Finalizing shutdown: stopping background monitors, authserver, and MySQL"
+    log "Finalizing shutdown: stopping background monitors, worldserver, companion services, authserver, and MySQL"
     stop_pid_tree_gracefully "$READY_PID" "readiness monitor" 3
     READY_PID=""
     rm -f "$READY_PID_FILE" 2>/dev/null || true
@@ -1155,6 +1165,7 @@ cleanup() {
     rm -f "$METRICS_PID_FILE" 2>/dev/null || true
     stop_pid_gracefully "$WORLD_PID" "worldserver" 60
     rm -f "$WORLD_PID_FILE" 2>/dev/null || true
+    companion_stop_all || true
     stop_pid_gracefully "$AUTH_PID" "authserver" 30
     AUTH_PID=""
     rm -f "$AUTH_PID_FILE" 2>/dev/null || true
@@ -1257,6 +1268,26 @@ write_pid_record "$READY_PID_FILE" "$READY_PID"
 start_metrics_monitor
 start_shutdown_watchdog
 
+# Companion services start only after the same stable worldserver readiness
+# marker AMP uses. This lets AzerothCore apply character-database migrations
+# before a bridge or worker begins polling module tables.
+if (( ${#COMPANION_RUNTIME_IDS[@]} > 0 )) \
+    && is_true "${AMP_ACORE_MANAGE_COMPANION_SERVICES:-1}"; then
+    while process_is_running "$WORLD_PID" && process_is_running "$AUTH_PID" \
+        && process_is_running "$READY_PID" && [[ ! -f "$READY_MARKER" ]]; do
+        sleep 1
+    done
+    if [[ -f "$READY_MARKER" ]] && process_is_running "$WORLD_PID"; then
+        companion_start_all
+    else
+        log "Worldserver did not become ready; companion services will not start"
+    fi
+fi
+
+while process_is_running "$WORLD_PID"; do
+    companion_report_unexpected_exits
+    sleep 1
+done
 set +e
 wait "$WORLD_PID"
 WORLD_STATUS=$?

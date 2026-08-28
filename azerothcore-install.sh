@@ -39,7 +39,7 @@ CLIENT_DATA_VERSION="v20.0"
 MYSQL_RELEASE="8.4"
 CUSTOM_MYSQL_VERSION=""
 MYSQL_BUFFER_POOL_MB="1024"
-INSTALLER_TEMPLATE_VERSION="18"
+INSTALLER_TEMPLATE_VERSION="19"
 EXPECTED_TEMPLATE_VERSION=""
 
 while (($#)); do
@@ -75,13 +75,18 @@ log "Installer v$INSTALLER_TEMPLATE_VERSION starting"
 
 [[ -f "$BASE_DIR/azerothcore-run.sh" ]] \
     || fail "The AzerothCore launcher was not downloaded before the installer"
-if ! grep -Fq 'LAUNCHER_TEMPLATE_VERSION="18"' "$BASE_DIR/azerothcore-run.sh"; then
-    fail "Template/runtime version mismatch: installer v$INSTALLER_TEMPLATE_VERSION did not receive launcher v18. Update the configured template repository/ref before retrying."
+if ! grep -Fq 'LAUNCHER_TEMPLATE_VERSION="19"' "$BASE_DIR/azerothcore-run.sh"; then
+    fail "Template/runtime version mismatch: installer v$INSTALLER_TEMPLATE_VERSION did not receive launcher v19. Update the configured template repository/ref before retrying."
 fi
 [[ -f "$BASE_DIR/azerothcore-watchdog.sh" ]] \
     || fail "The AzerothCore shutdown watchdog was not downloaded before the installer"
-if ! grep -Fq 'WATCHDOG_TEMPLATE_VERSION="18"' "$BASE_DIR/azerothcore-watchdog.sh"; then
-    fail "Template/runtime version mismatch: installer v$INSTALLER_TEMPLATE_VERSION did not receive shutdown watchdog v18. Update the configured template repository/ref before retrying."
+if ! grep -Fq 'WATCHDOG_TEMPLATE_VERSION="19"' "$BASE_DIR/azerothcore-watchdog.sh"; then
+    fail "Template/runtime version mismatch: installer v$INSTALLER_TEMPLATE_VERSION did not receive shutdown watchdog v19. Update the configured template repository/ref before retrying."
+fi
+[[ -f "$BASE_DIR/azerothcore-companions.sh" ]] \
+    || fail "The managed companion service library was not downloaded before the installer"
+if ! grep -Fq 'COMPANION_LIBRARY_VERSION="19"' "$BASE_DIR/azerothcore-companions.sh"; then
+    fail "Template/runtime version mismatch: installer v$INSTALLER_TEMPLATE_VERSION did not receive companion library v19. Update the configured template repository/ref before retrying."
 fi
 
 case "$BUILD_TYPE" in
@@ -92,7 +97,7 @@ esac
 [[ "$MYSQL_BUFFER_POOL_MB" =~ ^[0-9]+$ ]] || fail "MySQL buffer pool must be an integer"
 (( MYSQL_BUFFER_POOL_MB >= 256 )) || fail "MySQL buffer pool must be at least 256 MB"
 
-required_commands=(git cmake ninja clang clang++ ccache curl jq unzip tar xz sed awk grep find nproc ps sha256sum nm ldd readlink openssl dpkg-query dirname setsid flock timeout)
+required_commands=(git cmake ninja clang clang++ ccache curl jq unzip tar xz sed awk grep find nproc ps sha256sum nm ldd readlink openssl dpkg-query dirname setsid flock timeout python3)
 for command_name in "${required_commands[@]}"; do
     command -v "$command_name" >/dev/null 2>&1 || fail "Required command '$command_name' is missing from the AMP container"
 done
@@ -125,6 +130,11 @@ MYSQL_PID_FILE="$MYSQL_RUN_DIR/mysqld.pid"
 MYSQL_COMPAT_DIR="$MYSQL_DIR/compat"
 MYSQL_CLIENT_RUNTIME_DIR="$BASE_DIR/runtime/mysql-client"
 LEGACY_MYSQL_PASSWORD_FILE="$STATE_DIR/mysql-runtime-password"
+
+# shellcheck source=azerothcore-companions.sh
+source "$BASE_DIR/azerothcore-companions.sh"
+[[ "$COMPANION_LIBRARY_VERSION" == "$INSTALLER_TEMPLATE_VERSION" ]] \
+    || fail "Template/runtime version mismatch between installer and companion library"
 
 # AzerothCore documents "." as the Unix-socket host marker. Current AzerothCore
 # releases have an upstream bug where the first successful socket connection
@@ -165,7 +175,7 @@ ensure_servers_are_stopped() {
     while IFS=' ' read -r process_pid process_command; do
         [[ -n "$process_pid" ]] || continue
         case "$process_command" in
-            "$DIST_DIR/bin/worldserver"*|"$DIST_DIR/bin/authserver"*|"$BASE_DIR/azerothcore-run.sh"*)
+            "$DIST_DIR/bin/worldserver"*|"$DIST_DIR/bin/authserver"*|"$BASE_DIR/azerothcore-run.sh"*|"$BASE_DIR/services/"*|*"$SOURCE_DIR/modules/"*/tools/llm_chatter_bridge.py*)
                 fail "AzerothCore is still running in this AMP instance. Stop the instance before running Update."
                 ;;
         esac
@@ -855,8 +865,11 @@ MYSQL_STARTED_HERE="false"
 MYSQL_PID=""
 prepare_core_repository
 prepare_modules
+companion_discover_installed_services
+companion_prepare_installed_services
 verify_portable_mysql_toolchain
 build_azerothcore
+companion_configure_installed_services
 unset LD_LIBRARY_PATH || true
 install_client_data
 

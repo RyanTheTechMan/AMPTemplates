@@ -306,6 +306,52 @@ Changing the module list causes the template to update the source tree and rebui
 
 Again, do **not** add `mod-playerbots` this way; choose a Playerbots distribution so the required matching core is used.
 
+### Managed module companion services
+
+Some compiled modules also need a long-running bridge or worker. Template v19 keeps these helpers under the same launcher-owned lifecycle as MySQL, `authserver`, and `worldserver`. The installer detects supported services from the resolved `state/module-records` metadata, prepares them during **Update**, and writes only the enabled service IDs to `state/companion-services`. Normal **Start** never installs Python packages.
+
+The first adapter supports `Hokken/mod-llm-chatter@master`. It:
+
+- keeps the module compiled normally under `source/modules/mod-llm-chatter`
+- creates a private virtual environment at `services/llm-chatter/venv`
+- reads the current upstream requirements location (`tools/requirements.txt`, with a legacy root fallback)
+- refreshes dependencies only when the resolved module commit, requirements hash, Python version, or AMP compatibility-patch revision changes
+- applies a verified, idempotent AMP compatibility patch that adds `LLMChatter.Database.UnixSocket` to the bridge and its built-in health check
+- starts the bridge only after the stable `AMP_AZEROTHCORE_READY` gate
+- writes bridge output to `logs/llm-chatter-bridge.log` and its health report to `logs/llm-chatter/healthcheck.log`
+
+The live module config remains the single source of truth:
+
+```text
+dist/etc/modules/mod_llm_chatter.conf
+```
+
+AMP sets only its integration values in that file: the private MySQL socket, the local OS/MySQL username, an empty DB password, the character database name, and persistent log paths. Provider, model, API keys, prompt behavior, and other module settings stay in the module config and are never copied into AMP settings.
+
+Example for an Ollama server on the LAN:
+
+```ini
+LLMChatter.Enable = 1
+LLMChatter.Provider = ollama
+LLMChatter.Model = qwen3:4b-instruct
+LLMChatter.Ollama.BaseUrl = http://192.168.1.50:11434
+LLMChatter.Ollama.DisableThinking = 1
+```
+
+The Ollama host must listen on its LAN interface and permit the AMP host through its firewall. No Ollama API key is required. Do not change the AMP-managed `LLMChatter.Database.*` socket values to expose MySQL over TCP.
+
+If both `DustinHendrickson/mod-ollama-chat` and `Hokken/mod-llm-chatter` are selected, Update prints a warning because their chat behavior may overlap. It never deletes either module automatically.
+
+To migrate:
+
+1. Stop the instance.
+2. In **Additional AzerothCore Modules**, remove `DustinHendrickson/mod-ollama-chat@main` and add `Hokken/mod-llm-chatter@master`.
+3. Press **Update** and wait for the rebuild and companion preparation to finish.
+4. Edit `dist/etc/modules/mod_llm_chatter.conf` with the desired provider/model settings.
+5. Start the instance and inspect `logs/llm-chatter/healthcheck.log` if the bridge reports a startup failure.
+
+Removing `mod-llm-chatter` later prevents the companion from being registered or started. Existing module configuration, logs, and the disposable venv are left in place.
+
 ## 13. Useful AMP integration settings
 
 The template exposes more than just launch arguments. Depending on the selected core, AMP can manage common settings for:
@@ -340,6 +386,7 @@ source/           AzerothCore source checkout
 source/modules/   source modules
 build/            CMake build tree
 dist/             installed AzerothCore runtime
+services/         disposable managed companion runtimes/virtual environments
 mysql/            portable MySQL installation
 mysql-data/       MySQL data directory
 logs/             server logs, including amp-launcher.log
@@ -380,11 +427,11 @@ For a live server, stop the instance before taking a raw filesystem copy of the 
 
 ### Template/runtime version synchronization
 
-The AMP template downloads `azerothcore-install.sh`, `azerothcore-run.sh`, and `azerothcore-watchdog.sh` from the Git repository/ref selected by **Template Repository Ref**. The KVP/JSON template and those runtime scripts must come from the same revision.
+The AMP template downloads `azerothcore-install.sh`, `azerothcore-run.sh`, `azerothcore-watchdog.sh`, and `azerothcore-companions.sh` from the Git repository/ref selected by **Template Repository Ref**. The KVP/JSON template and those runtime scripts must come from the same revision.
 
-Template v18 passes its expected version to the downloaded installer and requires both the downloaded launcher and shutdown watchdog to declare the same version. A stale branch now fails immediately with a clear `Template/runtime version mismatch` message, before MySQL or client data is downloaded. The script URLs also include a version-specific cache-busting query parameter.
+Template v19 passes its expected version to the downloaded installer and requires the launcher, shutdown watchdog, and companion library to declare the same version. A stale branch fails immediately with a clear `Template/runtime version mismatch` message, before MySQL or client data is downloaded. The script URLs also include a version-specific cache-busting query parameter.
 
-For the normal repository setup, keep **Template Repository Ref** set to `main` and make sure `main` contains the same v18 files as the imported template.
+For the normal repository setup, keep **Template Repository Ref** set to `main` and make sure `main` contains the same v19 files as the imported template.
 
 
 ## 17. Troubleshooting
@@ -427,9 +474,9 @@ verify that the instance is using `cubecoders/ampbase:debian`, fetch the current
 
 Debian 13 packages the OpenSSL legacy provider separately as `openssl-provider-legacy`. The AMP template installs that package because WoW 3.3.5a uses RC4; startup verifies `legacy.so` and refuses to launch if the container has not been refreshed with the required provider.
 
-Template v17 keeps AMP's child-process monitor on `worldserver` so CPU/RAM readings are meaningful, while adding a detached `azerothcore-watchdog.sh` lifecycle owner. The watchdog is re-parented outside the launcher/worldserver process tree and therefore survives if AMP stops tracking `worldserver` and tears down the launcher before its EXIT trap finishes. It then stops helper monitors, `authserver`, and MySQL in the correct order.
+AMP deliberately monitors the Bash launcher, not `worldserver`. Do not set `App.MonitorChildProcessName=worldserver`: doing so ends AMP's supervisor ownership too early and can orphan `authserver`, companion services, or MySQL. The detached `azerothcore-watchdog.sh` remains a last-resort lifecycle owner if AMP force-kills the launcher; it stops the complete process stack in bounded stages.
 
-If a current v17 instance still exits during startup, inspect both the application console and:
+If a current v19 instance still exits during startup, inspect both the application console and:
 
 ```text
 logs/amp-launcher.log
@@ -592,7 +639,20 @@ A new instance can spend several minutes importing the Character, World, and Pla
 
 AMP sends `server shutdown 1` to `worldserver` and waits for the long-lived launcher to finish. A Playerbots server may remain in **Stopping** while AzerothCore logs out every online bot, drains pending character-database writes, closes the World/Character/Auth/Playerbots pools, then lets the launcher stop `authserver` and MySQL. This is an orderly data-preserving shutdown rather than a hang; `worldserver exited with status 0` indicates success.
 
-Template v17 also adds an independent shutdown watchdog. If AMP removes the launcher after the monitored `worldserver` exits, the watchdog continues cleanup instead of leaving `authserver` and `mysqld` orphaned under the container's `tini` process. It stops `authserver` before MySQL, requests a bounded `mysqladmin shutdown`, then escalates to SIGTERM and finally SIGKILL if MySQL does not exit. The AMP **Kill** action therefore has a reliable full-stack cleanup path as well. Time spent *before* `worldserver exited with status 0` can still be genuine Playerbots logout/database-flush work.
+Template v19 retains the independent shutdown watchdog. If AMP force-kills the launcher, the watchdog stops readiness/metrics helpers, `worldserver`, every recorded companion process tree, `authserver`, and MySQL instead of leaving them reparented under the container's `tini` process. Companion and server stops use bounded TERM-to-KILL escalation; MySQL first receives a bounded `mysqladmin shutdown`, then TERM and KILL if required. Time spent *before* `worldserver exited with status 0` can still be genuine Playerbots logout/database-flush work.
+
+A normal companion-enabled stop should read approximately:
+
+```text
+[AMP/AzerothCore] worldserver exited with status 0
+[AMP/AzerothCore] Finalizing shutdown: stopping background monitors, worldserver, companion services, authserver, and MySQL
+[AMP/AzerothCore] Stopping companion service: llm-chatter
+[AMP/AzerothCore] llm-chatter bridge stopped
+[AMP/AzerothCore] Stopping authserver
+[AMP/AzerothCore] Stopping MySQL gracefully
+[AMP/AzerothCore] MySQL stopped
+[AMP/AzerothCore] Shutdown complete
+```
 
 ### AMP player/status metrics
 

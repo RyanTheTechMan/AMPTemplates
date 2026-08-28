@@ -99,6 +99,23 @@
         "Placeholder": "azerothcore/mod-autobalance@master,owner/other-module@v1.0.0"
     },
     {
+        "DisplayName": "Automatically Manage Module Companion Services",
+        "Category": "AzerothCore:stadia_controller",
+        "Subcategory": "Companion Services:memory:2",
+        "Description": "Starts and stops supported long-running module helpers with AzerothCore. Enabled by default; preparation still occurs during Update, not during normal Start.",
+        "Keywords": "module,companion,service,bridge,worker,python,node,daemon",
+        "FieldName": "ManageCompanionServices",
+        "InputType": "checkbox",
+        "IsFlagArgument": false,
+        "ParamFieldName": "ManageCompanionServices",
+        "IncludeInCommandLine": false,
+        "EnumValues": {
+            "False": "0",
+            "True": "1"
+        },
+        "DefaultValue": "true"
+    },
+    {
         "DisplayName": "Build Type",
         "Category": "AzerothCore:stadia_controller",
         "Subcategory": "Build:build:2",

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-WATCHDOG_TEMPLATE_VERSION="18"
+WATCHDOG_TEMPLATE_VERSION="19"
 set -u
 IFS=$'\n\t'
 umask 027
@@ -41,6 +41,7 @@ AUTH_PID_FILE="$RUN_DIR/authserver.pid"
 WORLD_PID_FILE="$RUN_DIR/worldserver.pid"
 READY_PID_FILE="$RUN_DIR/readiness-monitor.pid"
 METRICS_PID_FILE="$RUN_DIR/metrics-monitor.pid"
+COMPANION_PID_DIR="$RUN_DIR/companions"
 WATCHDOG_PID_FILE="$RUN_DIR/shutdown-watchdog.pid"
 LIFECYCLE_FILE="$RUN_DIR/lifecycle.id"
 CLEANUP_LOCK_FILE="$RUN_DIR/cleanup.lock"
@@ -52,16 +53,25 @@ mkdir -p "$RUN_DIR" "$MYSQL_RUN_DIR" 2>/dev/null || true
 
 pid_starttime() {
     local pid="$1"
-    [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/stat" ]] || return 1
-    awk '{print $22}' "/proc/$pid/stat" 2>/dev/null
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    if [[ -r "/proc/$pid/stat" ]]; then
+        awk '{print $22}' "/proc/$pid/stat" 2>/dev/null
+    else
+        # Portable test fallback; AMP's Debian runtime always uses /proc.
+        ps -o lstart= -p "$pid" 2>/dev/null | tr -d '[:space:]'
+    fi
 }
 
 pid_matches() {
     local pid="$1" expected_start="${2:-}" actual_start state
     [[ "$pid" =~ ^[0-9]+$ ]] || return 1
     kill -0 "$pid" 2>/dev/null || return 1
-    state="$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null || true)"
-    [[ "$state" != "Z" ]] || return 1
+    if [[ -r "/proc/$pid/stat" ]]; then
+        state="$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null || true)"
+    else
+        state="$(ps -o stat= -p "$pid" 2>/dev/null | awk '{print substr($1,1,1)}')"
+    fi
+    [[ "$state" != "Z" && -n "$state" ]] || return 1
     if [[ -n "$expected_start" ]]; then
         actual_start="$(pid_starttime "$pid" 2>/dev/null || true)"
         [[ -n "$actual_start" && "$actual_start" == "$expected_start" ]] || return 1
@@ -89,7 +99,57 @@ wait_for_pid_exit() {
     return 0
 }
 
-stop_recorded_process() {
+child_pids() {
+    local parent_pid="$1"
+    ps -eo pid=,ppid= 2>/dev/null | awk -v parent="$parent_pid" '$2 == parent { print $1 }'
+}
+
+TREE_PIDS=()
+TREE_STARTS=()
+
+snapshot_process_tree() {
+    local pid="$1" expected_start="${2:-}" child child_start actual_start
+    pid_matches "$pid" "$expected_start" || return 0
+    actual_start="$(pid_starttime "$pid" 2>/dev/null || true)"
+    [[ -n "$actual_start" ]] || return 0
+    while IFS= read -r child; do
+        [[ -n "$child" ]] || continue
+        child_start="$(pid_starttime "$child" 2>/dev/null || true)"
+        [[ -n "$child_start" ]] || continue
+        snapshot_process_tree "$child" "$child_start"
+    done < <(child_pids "$pid")
+    TREE_PIDS+=("$pid")
+    TREE_STARTS+=("$actual_start")
+}
+
+signal_process_snapshot() {
+    local signal_name="$1" index
+    for index in "${!TREE_PIDS[@]}"; do
+        if pid_matches "${TREE_PIDS[index]}" "${TREE_STARTS[index]}"; then
+            kill -"$signal_name" "${TREE_PIDS[index]}" 2>/dev/null || true
+        fi
+    done
+}
+
+process_snapshot_is_running() {
+    local index
+    for index in "${!TREE_PIDS[@]}"; do
+        pid_matches "${TREE_PIDS[index]}" "${TREE_STARTS[index]}" && return 0
+    done
+    return 1
+}
+
+wait_for_process_snapshot() {
+    local timeout_seconds="$1" deadline
+    deadline=$((SECONDS + timeout_seconds))
+    while process_snapshot_is_running; do
+        (( SECONDS >= deadline )) && return 1
+        sleep 0.25
+    done
+    return 0
+}
+
+stop_recorded_process_tree() {
     local file="$1" name="$2" term_timeout="${3:-15}" pid start
     read_pid_record "$file" || { rm -f "$file" 2>/dev/null || true; return 0; }
     pid="$RECORD_PID"
@@ -99,15 +159,31 @@ stop_recorded_process() {
         return 0
     fi
 
+    TREE_PIDS=()
+    TREE_STARTS=()
+    snapshot_process_tree "$pid" "$start"
     log "Stopping $name"
-    kill -TERM "$pid" 2>/dev/null || true
-    if ! wait_for_pid_exit "$pid" "$start" "$term_timeout"; then
-        log "$name did not stop after ${term_timeout}s; sending SIGKILL"
-        kill -KILL "$pid" 2>/dev/null || true
-        wait_for_pid_exit "$pid" "$start" 5 || true
+    signal_process_snapshot TERM
+    if ! wait_for_process_snapshot "$term_timeout"; then
+        log "$name did not stop after ${term_timeout}s; sending SIGKILL to its remaining process tree"
+        signal_process_snapshot KILL
+        wait_for_process_snapshot 5 || true
     fi
     rm -f "$file" 2>/dev/null || true
     log "$name stopped"
+    return 0
+}
+
+stop_companion_services() {
+    local file service_id
+    [[ -d "$COMPANION_PID_DIR" ]] || return 0
+    for file in "$COMPANION_PID_DIR"/*.pid; do
+        [[ -e "$file" ]] || continue
+        service_id="$(basename "$file" .pid)"
+        stop_recorded_process_tree "$file" "companion service: $service_id" 20 || true
+    done
+    rmdir "$COMPANION_PID_DIR" 2>/dev/null || true
+    return 0
 }
 
 mysql_process_record() {
@@ -183,8 +259,8 @@ trap watchdog_exit EXIT
 printf '%s\t%s\t%s\n' "$$" "$(pid_starttime $$ 2>/dev/null || true)" "$LIFECYCLE_ID" > "$WATCHDOG_PID_FILE"
 
 # The watchdog is deliberately detached from the launcher process tree. It is a
-# last-resort owner for authserver/MySQL when AMP stops tracking worldserver and
-# tears down the launcher before its EXIT trap can finish.
+# last-resort lifecycle owner if AMP force-kills the Bash supervisor before its
+# EXIT trap can finish.
 while current_lifecycle_matches; do
     cleanup_already_complete && exit 0
     if ! pid_matches "$SUPERVISOR_PID" "$SUPERVISOR_STARTTIME" \
@@ -209,19 +285,25 @@ cleanup_already_complete && exit 0
 log "Managed process exited; ensuring all AzerothCore services are stopped"
 
 # Stop helper processes first so no further readiness or metric SQL queries run.
-stop_recorded_process "$READY_PID_FILE" "readiness monitor" 3
-stop_recorded_process "$METRICS_PID_FILE" "metrics monitor" 3
+stop_recorded_process_tree "$READY_PID_FILE" "readiness monitor" 3
+stop_recorded_process_tree "$METRICS_PID_FILE" "metrics monitor" 3
 
 # If AMP killed the launcher rather than issuing the normal console shutdown,
 # worldserver may still be alive. TERM it briefly, then force it if necessary.
 if read_pid_record "$WORLD_PID_FILE" && pid_matches "$RECORD_PID" "$RECORD_STARTTIME"; then
-    stop_recorded_process "$WORLD_PID_FILE" "worldserver" 20
+    stop_recorded_process_tree "$WORLD_PID_FILE" "worldserver" 20
 else
     rm -f "$WORLD_PID_FILE" 2>/dev/null || true
 fi
 
+# Companion workers stop after worldserver, matching normal launcher cleanup.
+# Each PID file carries the lifecycle/start-time identity recorded by the
+# launcher, and the process-tree snapshot prevents reparented helper children
+# from retaining AMP file descriptors.
+stop_companion_services
+
 # authserver must stop before MySQL, otherwise it logs lost-connection errors.
-stop_recorded_process "$AUTH_PID_FILE" "authserver" 20
+stop_recorded_process_tree "$AUTH_PID_FILE" "authserver" 20
 stop_mysql
 
 rm -f "$RUN_DIR/worldserver.ready" 2>/dev/null || true
